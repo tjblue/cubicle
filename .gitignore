@@ -1,0 +1,10 @@
+node_modules/
+dist/
+desktop-build/
+src-tauri/target/
+src-tauri/gen/
+*.log
+
+archive/
+target-browser/
+src-tauri/target-browser/

@@ -1,0 +1,6 @@
+{
+  "identifier": "main-browser-events",
+  "description": "Allow the main application to receive browser metadata events.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}
