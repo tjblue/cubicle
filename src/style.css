@@ -439,3 +439,35 @@ header.app-menubar { flex: none; justify-content: flex-start; gap: 0; height: 37
 .profile-preview-body strong { color: #cbd8ea; }
 .profile-preview-error { border: 1px solid #74474f; border-radius: 6px; background: #3a252c; color: #f0b8bd; padding: 10px; font-size: 11px; overflow-wrap: anywhere; }
 .profile-preview-error[hidden] { display: none; }
+
+/* Compact Spaces directory */
+.app-sidebar { background: #15181c; }
+.sidebar-content { position: relative; padding: 14px 10px; }
+.sidebar-brand { color: #e8eded; }
+.sidebar-brand-mark { background: #e9ecec; color: #16191c; border-radius: 2px; }
+.spaces-heading { display: flex; gap: 3px; padding: 4px 3px 9px; color: #a2adb3; font-size: 10px; letter-spacing: .06em; }
+.spaces-heading > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+#space-count { color: #74818b; letter-spacing: 0; }
+.spaces-heading-actions { display: flex; flex: none; align-items: center; gap: 0; }
+.spaces-heading .spaces-heading-actions button { position: relative; display: grid; place-items: center; width: 25px; height: 27px; padding: 0; border-radius: 4px; color: #9aa7b1; font-size: 17px; line-height: 1; }
+.spaces-heading button svg { width: 15px; height: 15px; }
+.spaces-heading button:hover { background: #293139; color: #edf2f3; }
+#space-notification-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: #91adff; }
+#space-notification-dot[hidden], .space-search[hidden], .sidebar-popup[hidden] { display: none; }
+.space-search { background: transparent; border: 0; border-bottom: 1px solid #454b50; border-radius: 0; }
+.space-row { border: 0; border-left: 2px solid transparent; border-radius: 0; }
+.space-row:has(.space-select[aria-current]) { background: #252b30; border-left-color: #e9eeee; }
+.space-select { gap: 10px; padding: 7px 7px; border-radius: 0; }
+.space-folder { width: 17px; height: 17px; flex: none; }
+.space-label { display: grid; gap: 2px; min-width: 0; }
+.space-name, .space-path { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.space-name { font-weight: 600; }
+.space-path { color: #8fa1ba; font-size: 10px; }
+.space-add-secondary { margin-top: 12px; border: 1px solid #495057; border-radius: 2px; color: #cbd5e6; }
+.sidebar-popup { position: absolute; z-index: 30; right: 10px; width: min(210px, calc(100% - 20px)); padding: 6px; background: #252d36; border: 1px solid #4b5966; border-radius: 5px; box-shadow: 0 8px 24px #0008; color: #dbe4ec; font-size: 12px; }
+.sidebar-popup button { display: block; width: 100%; padding: 8px; border: 0; border-radius: 3px; background: transparent; color: inherit; text-align: left; font: inherit; }
+.sidebar-popup button:hover, .sidebar-popup button:focus-visible { background: #394653; }
+.sidebar-popup strong { display: block; padding: 6px 8px; }
+.sidebar-popup p { margin: 4px 8px 8px; color: #aebbc8; }
+.sidebar-menu-label { padding: 6px 8px; color: #94a3b3; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.space-context-menu { position: fixed; right: auto; width: 170px; }

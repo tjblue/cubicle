@@ -10,7 +10,7 @@ const example = {
 const research = { name: 'Research & notes', description: 'References alongside a working shell', space: { name: 'Research', root: 'C:/Projects/research', color: 'teal' }, layout: { type: 'split', direction: 'row', sizes: [45, 55], children: [ { type: 'group', active: 'notes', tabs: [{ id: 'notes', type: 'files', title: 'Notes', root: '${workspace}', pins: [{ name: 'Reading list', path: '${workspace}/reading' }] }, { id: 'terminal', type: 'terminal', title: 'Shell', shell: 'powershell', cwd: '${workspace}' }] }, { type: 'group', active: 'web', tabs: [{ id: 'web', type: 'browser', title: 'References', url: 'https://en.wikipedia.org', favorites: [{ name: 'Wikipedia', url: 'https://en.wikipedia.org' }] }] } ] } };
 const clone = x => JSON.parse(JSON.stringify(x));
 const $ = id => document.getElementById(id);
-const key = 'cli-viewer-profile-mockup-v1';
+const key = 'cubicle-profile-mockup-v1';
 let state;
 try { state = JSON.parse(localStorage.getItem(key)); if (!state || !Array.isArray(state.profiles) || !state.profiles.length || !Array.isArray(state.spaces)) throw Error(); state.profiles.forEach(validate); } catch { state = { profiles: [clone(example), clone(research)], spaces: [{name:'Current project', groups: []}, {name:'Operations', groups: []}], selected: 0 }; }
 if (!Number.isInteger(state.selected) || !state.profiles[state.selected]) state.selected = 0;

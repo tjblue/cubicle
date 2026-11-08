@@ -2,19 +2,13 @@ import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { findFileLinks } from './terminal-links.js';
+import { captureTerminalDirectory } from './terminal-directory-capture.js';
 import '@xterm/xterm/css/xterm.css';
 
 const sessions = new Map();
 
 export function hasTerminal(id) { return sessions.has(id); }
 export function getTerminalTitle(id) { return sessions.get(id)?.title || ''; }
-export function getTerminalMatchCandidates(now = Date.now()) {
-  return [...sessions.entries()].filter(([, s]) => s.started && !s.closed).map(([paneId, s]) => ({ paneId, terminalId: s.id, cwd: s.cwd, enters: (s.recentEnters || []).filter(t => now - t < 30000) })).filter(s => s.enters.length);
-}
-export function isTerminalMatchCurrent(paneId, terminalId) { const s = sessions.get(paneId); return !!s && s.id === terminalId && s.started && !s.closed; }
-export function clearTerminalMatchCandidates() { for (const session of sessions.values()) session.recentEnters = []; }
-
-
 export function mountTerminal(id, container, cwd = null, onTitleChange = () => {}, onFileLink = () => {}, options = {}) {
   let session = sessions.get(id);
   if (!session) {
@@ -28,8 +22,13 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
-    session = { id: crypto.randomUUID(), element, terminal, fit, started: false, closed: false, ready: null, input: Promise.resolve(), cwd, onFileLink };
-    terminal.parser.registerOscHandler(7, value => { try { const url = new URL(value); if (url.protocol === 'file:') session.cwd = decodeURIComponent(url.pathname).replace(/^\/([a-z]:)/i, '$1'); } catch {} return false; });
+    session = { id: crypto.randomUUID(), element, terminal, fit, started: false, closed: false, ready: null, input: Promise.resolve(), cwd, onFileLink, onCwdChange: options.onCwdChange };
+    const updateCwd = path => {
+      if (session.closed || !path || session.cwd === path) return;
+      session.cwd = path;
+    };
+    session.updateCwd = updateCwd;
+    terminal.parser.registerOscHandler(7, value => { try { const url = new URL(value); if (url.protocol === 'file:') updateCwd(decodeURIComponent(url.pathname).replace(/^\/([a-z]:)/i, '$1')); } catch {} return false; });
     terminal.registerLinkProvider({ provideLinks(lineNumber, callback) {
       const line = terminal.buffer.active.getLine(lineNumber - 1); if (!line) { callback([]); return; }
       const text = line.translateToString(true); const links = [];
@@ -90,19 +89,6 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
       event.preventDefault();
       if (terminal.hasSelection()) copySelection(); else pasteClipboard();
     });
-    terminal.onKey(({ domEvent }) => {
-      if (domEvent.key !== 'Enter' || domEvent.isComposing || session.closed || !isTauri()) return;
-      const time = Date.now();
-      try {
-        if (localStorage.getItem('dockview-chat-resume-startup') !== 'false') {
-          session.recentEnters = [...(session.recentEnters || []).filter(t => time - t < 30000), time].slice(-32);
-        }
-        if (localStorage.getItem('dockview-enter-timing-diagnostics') === 'true') {
-          invoke('terminal_log_enter', { paneId: id, terminalId: session.id, timestamp: new Date(time).toISOString(), cwd: session.cwd })
-            .catch(error => console.error('Could not log terminal Enter timing', error));
-        }
-      } catch (error) { console.error('Could not record terminal Enter timing', error); }
-    });
     terminal.onData((data) => {
       session.input = session.input.then(() => session.ready).then(() => {
         if (!session.closed && session.started) return invoke('terminal_write', { id: session.id, data });
@@ -112,8 +98,19 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
       if (session.closed) return;
       session.resize();
       if (!isTauri()) throw new Error('Open the desktop app to use a terminal.');
-      await invoke('terminal_start', { id: session.id, cols: terminal.cols, rows: terminal.rows, cwd, shell: options.shell || null, env: options.env || null, output: channel });
-      if (!session.cwd) session.cwd = await invoke('terminal_default_cwd');
+      let startupCwd = cwd;
+      if (options.savedCwd && startupCwd) {
+        try { await invoke('validate_directory', { path: startupCwd }); }
+        catch {
+          terminal.writeln('\r\n\x1b[33m[The saved folder is unavailable; opening the default folder.]\x1b[0m');
+          startupCwd = options.fallbackCwd || null;
+          if (startupCwd) { try { await invoke('validate_directory', { path: startupCwd }); } catch { startupCwd = null; } }
+          updateCwd(startupCwd || await invoke('terminal_default_cwd'));
+        }
+      }
+      await invoke('terminal_start', { id: session.id, cols: terminal.cols, rows: terminal.rows, cwd: startupCwd, shell: options.shell || null, env: options.env || null, output: channel });
+      if (!session.cwd) updateCwd(await invoke('terminal_default_cwd'));
+      if (session.cwd) session.onCwdChange?.(session.cwd);
       if (options.command && !session.closed) await invoke('terminal_write', { id: session.id, data: options.command + '\r' });
       session.started = true;
       session.resize();
@@ -122,11 +119,17 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
   } else {
     session.onTitleChange = onTitleChange;
     session.onFileLink = onFileLink;
+    session.onCwdChange = options.onCwdChange;
     session.onTitleChange(session.title);
     container.append(session.element);
     requestAnimationFrame(() => session.resize());
   }
   return session;
+}
+
+// Capture all live shells before the app closes, including panes in inactive spaces.
+export async function captureTerminalDirectories() {
+  await Promise.all([...sessions.values()].map(session => captureTerminalDirectory(session, id => invoke('terminal_working_directory', { id }))));
 }
 
 export function refreshTerminal(id) {

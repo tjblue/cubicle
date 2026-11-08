@@ -78,6 +78,25 @@ fn terminal_default_cwd() -> Option<String> {
 }
 
 #[tauri::command]
+fn terminal_working_directory(terminals: State<'_, Terminals>, id: String) -> Result<Option<String>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let sessions = terminals.0.lock().map_err(|e| e.to_string())?;
+        let pid = sessions.get(&id).ok_or("Terminal is not running")?.child.process_id().ok_or("Terminal process is unavailable")?;
+        Ok(linux_process_directory(pid))
+    }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = (terminals, id); Ok(None) }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_directory(pid: u32) -> Option<String> {
+    let path = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    if !path.is_dir() { return None; }
+    path.to_str().map(str::to_owned)
+}
+
+#[tauri::command]
 fn terminal_log_enter(pane_id: String, terminal_id: String, timestamp: String, cwd: Option<String>) -> Result<(), String> {
     if pane_id.len() > 128 || terminal_id.len() > 128 || timestamp.len() > 40 || cwd.as_ref().is_some_and(|v| v.len() > 32768) {
         return Err("Invalid diagnostic event".into());
@@ -112,24 +131,23 @@ fn display_windows_path(path: &str) -> String {
 
 #[tauri::command]
 fn terminal_clipboard_read() -> Result<String, String> {
-    #[cfg(windows)]
-    { clipboard_win::get_clipboard(clipboard_win::formats::Unicode).map_err(|e| e.to_string()) }
-    #[cfg(not(windows))]
-    { Err("Clipboard is unavailable on this platform".into()) }
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_text())
+        .map_err(|e| format!("Could not read clipboard: {e}"))
 }
 
 #[tauri::command]
 fn terminal_clipboard_write(text: String) -> Result<(), String> {
-    #[cfg(windows)]
-    { clipboard_win::set_clipboard(clipboard_win::formats::Unicode, text).map_err(|e| e.to_string()) }
-    #[cfg(not(windows))]
-    { let _ = text; Err("Clipboard is unavailable on this platform".into()) }
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text))
+        .map_err(|e| format!("Could not write clipboard: {e}"))
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HookConfigStatus { provider: String, path: String, state: String, detail: String }
 
+#[cfg(windows)]
 const HOOK_SCRIPT: &str = r#"param([Parameter(Mandatory=$true)][string]$Provider)
 try {
   $raw = [Console]::In.ReadToEnd()
@@ -149,6 +167,26 @@ try {
 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
 "#;
 
+#[cfg(not(windows))]
+const UNIX_HOOK_SCRIPT: &str = r#"#!/bin/sh
+set -eu
+case "${1-}" in codex|claude|gemini) provider=$1 ;; *) exit 1 ;; esac
+case "${CUBICLE_TERMINAL_ID-}" in
+  ''|*[!a-zA-Z0-9_-]*) terminal=null ;;
+  *) terminal="\"$CUBICLE_TERMINAL_ID\"" ;;
+esac
+event=$(tr -d '\r\n')
+[ -n "$event" ] || exit 1
+timestamp=$(date -u '+%Y-%m-%dT%H:%M:%S.%NZ')
+directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+printf '{"provider":"%s","receivedAt":"%s","terminalId":%s,"event":%s}\n' "$provider" "$timestamp" "$terminal" "$event" >> "$directory/session-start-hooks.jsonl"
+"#;
+
+fn hook_script() -> &'static str {
+    #[cfg(windows)] { HOOK_SCRIPT }
+    #[cfg(not(windows))] { UNIX_HOOK_SCRIPT }
+}
+
 fn hook_paths() -> Result<Vec<(&'static str, std::path::PathBuf)>, String> {
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok_or("Home directory is unavailable")?;
     let home = std::path::PathBuf::from(home);
@@ -158,10 +196,11 @@ fn hook_paths() -> Result<Vec<(&'static str, std::path::PathBuf)>, String> {
 }
 fn hook_script_path() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    Ok(exe.parent().ok_or("App directory is unavailable")?.join("dockview-session-start-hook.ps1"))
+    Ok(exe.parent().ok_or("App directory is unavailable")?.join(if cfg!(windows) { "cubicle-session-start-hook.ps1" } else { "cubicle-session-start-hook.sh" }))
 }
 fn hook_command(provider: &str, script: &std::path::Path) -> String {
-    format!("powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\" -Provider {}", script.display(), provider.to_lowercase())
+    if cfg!(windows) { format!("powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{}\" -Provider {}", script.display(), provider.to_lowercase()) }
+    else { format!("sh '{}' {}", script.to_string_lossy().replace('\'', "'\\''"), provider.to_lowercase()) }
 }
 fn read_hook_config(path: &std::path::Path) -> Result<serde_json::Value, String> {
     match std::fs::read(path) {
@@ -171,7 +210,10 @@ fn read_hook_config(path: &std::path::Path) -> Result<serde_json::Value, String>
     }
 }
 fn hook_present(config: &serde_json::Value, command: &str) -> bool {
-    config.get("hooks").and_then(|v| v.get("SessionStart")).and_then(|v| v.as_array()).is_some_and(|groups| groups.iter().any(|group| group.get("hooks").and_then(|v| v.as_array()).is_some_and(|hooks| hooks.iter().any(|hook| hook.get("type").and_then(|v| v.as_str()) == Some("command") && hook.get("command").and_then(|v| v.as_str()) == Some(command)))))
+    config.get("hooks").and_then(|v| v.get("SessionStart")).and_then(|v| v.as_array()).is_some_and(|groups| groups.iter().any(|group| {
+        let unrestricted = group.get("matcher").is_none_or(|v| v.as_str().is_some_and(|s| s.is_empty() || s == "*"));
+        unrestricted && group.get("hooks").and_then(|v| v.as_array()).is_some_and(|hooks| hooks.iter().any(|hook| hook.get("type").and_then(|v| v.as_str()) == Some("command") && hook.get("command").and_then(|v| v.as_str()) == Some(command)))
+    }))
 }
 fn add_session_hook(config: &mut serde_json::Value, command: &str) -> Result<bool, String> {
     if hook_present(config, command) { return Ok(false); }
@@ -179,33 +221,39 @@ fn add_session_hook(config: &mut serde_json::Value, command: &str) -> Result<boo
     let hooks = root.entry("hooks").or_insert_with(|| serde_json::json!({})).as_object_mut().ok_or("hooks must be a JSON object")?;
     let starts = hooks.entry("SessionStart").or_insert_with(|| serde_json::json!([])).as_array_mut().ok_or("SessionStart must be an array")?;
     let mut handler = serde_json::json!({"type": "command", "command": command});
-    if command.ends_with(" -Provider codex") { handler["async"] = serde_json::Value::Bool(true); }
+    if command.ends_with(" -Provider codex") || command.ends_with(" codex") { handler["async"] = serde_json::Value::Bool(true); }
     starts.push(serde_json::json!({"hooks": [handler]}));
     Ok(true)
 }
 #[tauri::command]
 fn chat_resume_hook_status() -> Result<Vec<HookConfigStatus>, String> {
     let script = hook_script_path()?;
-    let script_ok = std::fs::read_to_string(&script).is_ok_and(|s| s == HOOK_SCRIPT);
+    let script_ok = std::fs::read_to_string(&script).is_ok_and(|s| s == hook_script());
     Ok(hook_paths()?.into_iter().map(|(provider, path)| {
         let command = hook_command(provider, &script);
         let (state, detail) = match read_hook_config(&path) {
             Err(e) => ("error", e),
             Ok(mut config) => match add_session_hook(&mut config, &command) {
                 Err(e) => ("error", e),
-                Ok(false) if script_ok => ("installed", "Hook configured. Codex may require hook trust review.".into()),
-                Ok(false) => ("missing", "Hook script is missing or changed; repair is required.".into()),
-                Ok(true) => ("missing", "Dockview hook not configured.".into()),
+                Ok(false) if provider == "Gemini" && (config.pointer("/hooksConfig/enabled").and_then(|v| v.as_bool()) == Some(false) || config.pointer("/hooksConfig/disabled").and_then(|v| v.as_array()).is_some_and(|items| items.iter().any(|v| v.as_str() == Some(&command)))) => ("error", "Gemini hooks are disabled in settings.".into()),
+                Ok(false) if provider == "Claude" && config.get("disableAllHooks").and_then(|v| v.as_bool()) == Some(true) => ("error", "Claude hooks are disabled in settings.".into()),
+                Ok(false) if script_ok => ("installed", "Hook entry and script found; CLI hook settings and trust can affect whether it runs.".into()),
+                Ok(false) if script.exists() => ("error", "The hook script has changed or cannot be read; it will not be overwritten.".into()),
+                Ok(false) => ("missing", "Hook script is missing; add the hook to restore it.".into()),
+                Ok(true) => ("missing", "Cubicle hook not configured.".into()),
             },
         };
         HookConfigStatus { provider: provider.into(), path: path.to_string_lossy().into_owned(), state: state.into(), detail }
     }).collect())
 }
-// Read only events written by configured Dockview hooks. The bounded tail avoids loading chat history.
+// Read only events written by configured Cubicle hooks. The bounded tail avoids loading chat history.
 #[tauri::command]
 fn chat_resume_recent_hooks() -> Result<Vec<serde_json::Value>, String> {
     use std::io::{Seek, SeekFrom};
     let mut logs = std::collections::HashSet::new();
+    if hook_paths()?.iter().any(|(provider, path)| read_hook_config(path).is_ok_and(|config| hook_script_path().is_ok_and(|script| hook_present(&config, &hook_command(provider, &script))))) {
+        logs.insert(hook_script_path()?.with_file_name("session-start-hooks.jsonl"));
+    }
     for (_, path) in hook_paths()? {
         let config = match read_hook_config(&path) { Ok(v) => v, Err(_) => continue };
         if let Some(groups) = config.pointer("/hooks/SessionStart").and_then(|v| v.as_array()) {
@@ -213,7 +261,7 @@ fn chat_resume_recent_hooks() -> Result<Vec<serde_json::Value>, String> {
                 if let Some(cmd) = item.get("command").and_then(|v| v.as_str()) {
                     if let Some(script) = cmd.split('"').nth(1) {
                         let script = std::path::Path::new(script);
-                        if script.file_name().is_some_and(|v| v == "dockview-session-start-hook.ps1") {
+                        if script.file_name().is_some_and(|v| v == "cubicle-session-start-hook.ps1") {
                             if let Some(parent) = script.parent() { logs.insert(parent.join("session-start-hooks.jsonl")); }
                         }
                     }
@@ -270,20 +318,31 @@ async fn terminal_agent_kinds(terminals: State<'_, Terminals>, id: String) -> Re
 
 #[tauri::command]
 fn chat_resume_install_hook(provider: String) -> Result<(), String> {
-    if !cfg!(windows) { return Err("This temporary hook is available on Windows only".into()); }
     let path = hook_paths()?.into_iter().find(|(name, _)| *name == provider).ok_or("Unknown CLI")?.1;
     let script = hook_script_path()?;
+    install_session_hook(&path, &script, &provider)
+}
+
+fn install_session_hook(path: &std::path::Path, script: &std::path::Path, provider: &str) -> Result<(), String> {
+    let original = match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("Cannot read configuration: {e}")),
+    };
     let mut config = read_hook_config(&path)?;
-    let changed = add_session_hook(&mut config, &hook_command(&provider, &script))?;
-    if let Ok(existing) = std::fs::read_to_string(&script) { if existing != HOOK_SCRIPT { return Err("The Dockview hook script has been modified; it was not overwritten.".into()); } }
-    else if script.exists() { return Err("Cannot read the existing Dockview hook script".into()); }
-    else { std::fs::write(&script, HOOK_SCRIPT).map_err(|e| format!("Cannot write hook script: {e}"))?; }
+    let changed = add_session_hook(&mut config, &hook_command(provider, script))?;
+    if let Ok(existing) = std::fs::read_to_string(&script) { if existing != hook_script() { return Err("The Cubicle hook script has been modified; it was not overwritten.".into()); } }
+    else if script.exists() { return Err("Cannot read the existing Cubicle hook script".into()); }
+    else { std::fs::write(&script, hook_script()).map_err(|e| format!("Cannot write hook script: {e}"))?; }
     if changed {
         let parent = path.parent().ok_or("Invalid configuration path")?;
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let json = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
         let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| format!("Cannot prepare configuration update: {e}"))?;
+        if let Ok(metadata) = std::fs::metadata(path) { temp.as_file().set_permissions(metadata.permissions()).map_err(|e| format!("Cannot preserve configuration permissions: {e}"))?; }
         temp.write_all(&json).and_then(|_| temp.as_file().sync_all()).map_err(|e| format!("Cannot write configuration: {e}"))?;
+        let current = match std::fs::read(path) { Ok(bytes) => Some(bytes), Err(e) if e.kind() == std::io::ErrorKind::NotFound => None, Err(e) => return Err(format!("Cannot recheck configuration: {e}")) };
+        if current != original { return Err("Configuration changed while adding the hook; try again.".into()); }
         temp.persist(&path).map_err(|e| format!("Cannot update {}: {}", path.display(), e.error))?;
     }
     Ok(())
@@ -302,9 +361,9 @@ fn main() {
             tauri::http::Response::builder().status(204).header("Access-Control-Allow-Origin", "*").body(Vec::new()).unwrap()
         })
         .manage(Terminals::default())
-        .invoke_handler(tauri::generate_handler![terminal_start, terminal_write, terminal_default_cwd, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, list_files, preview_file, save_markdown, resolve_file_link, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, list_files, preview_file, save_markdown, resolve_file_link, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
         .build(tauri::generate_context!())
-        .expect("failed to build Dockview desktop")
+        .expect("failed to build Cubicle")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(terminals) = app.try_state::<Terminals>() {
@@ -323,9 +382,9 @@ mod tests {
     #[test]
     fn session_hook_merge_preserves_existing_config_and_is_idempotent() {
         let mut config = serde_json::json!({"theme":"dark", "hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"existing"}]}], "Stop":[{"other":true}]}});
-        assert_eq!(add_session_hook(&mut config, "dockview test").unwrap(), true);
-        assert!(hook_present(&config, "dockview test"));
-        assert_eq!(add_session_hook(&mut config, "dockview test").unwrap(), false);
+        assert_eq!(add_session_hook(&mut config, "cubicle test").unwrap(), true);
+        assert!(hook_present(&config, "cubicle test"));
+        assert_eq!(add_session_hook(&mut config, "cubicle test").unwrap(), false);
         assert_eq!(config["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
         assert_eq!(config["theme"], "dark");
         assert_eq!(config["hooks"]["Stop"][0]["other"], true);
@@ -355,7 +414,7 @@ mod tests {
                 if n == 0 { break; }
                 all.extend_from_slice(&buf[..n]);
                 let _ = tx.send(String::from_utf8_lossy(&all).to_string());
-                if String::from_utf8_lossy(&all).contains("DOCKVIEW_PTY_TEST") { break; }
+                if String::from_utf8_lossy(&all).contains("CUBICLE_PTY_TEST") { break; }
             }
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -366,14 +425,14 @@ mod tests {
             if !sent_command && received.contains("\x1b[6n") {
                 // ConPTY asks the terminal emulator for the cursor position at startup.
                 writer.write_all(b"\x1b[1;1R").unwrap();
-                writer.write_all(b"echo DOCKVIEW_PTY_TEST\r\nexit\r\n").unwrap();
+                writer.write_all(b"echo CUBICLE_PTY_TEST\r\nexit\r\n").unwrap();
                 writer.flush().unwrap();
                 sent_command = true;
             }
-            if received.contains("DOCKVIEW_PTY_TEST") { break; }
+            if received.contains("CUBICLE_PTY_TEST") { break; }
         }
         let _ = child.kill();
-        assert!(received.contains("DOCKVIEW_PTY_TEST"), "command output did not arrive through the PTY: {received:?}");
+        assert!(received.contains("CUBICLE_PTY_TEST"), "command output did not arrive through the PTY: {received:?}");
     }
 }
 
@@ -395,21 +454,13 @@ fn validate_directory(path: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn choose_space_folder(initial_path: Option<String>) -> Result<Option<String>, String> {
-    #[cfg(windows)]
-    {
-        tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
             let mut picker = rfd::FileDialog::new().set_title("Choose a project folder");
             if let Some(path) = initial_path.filter(|path| std::path::Path::new(path).is_dir()) {
                 picker = picker.set_directory(path);
             }
             Ok(picker.pick_folder().map(|path| path.to_string_lossy().into_owned()))
-        }).await.map_err(|error| error.to_string())?
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = initial_path;
-        Err("The folder picker is only available on Windows".into())
-    }
+    }).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -467,7 +518,7 @@ mod file_workflow_tests {
     use super::*;
     #[test]
     fn resolves_relative_links_and_rejects_stale_saves() {
-        let folder = std::env::temp_dir().join(format!("dockview-file-test-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!("cubicle-file-test-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let file = folder.join("sample.md");
         std::fs::write(&file, "# Before\n").unwrap();
@@ -477,5 +528,66 @@ mod file_workflow_tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "# After\n");
         std::fs::remove_file(file).unwrap();
         std::fs::remove_dir(folder).unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod terminal_directory_tests {
+    use super::*;
+    use std::io::BufRead;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn tracks_the_shell_directory_after_cd() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut shell = Command::new("sh").args(["-c", "cd \"$1\" && echo ready && read line", "sh"]).arg(directory.path()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(shell.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), "ready");
+        assert_eq!(linux_process_directory(shell.id()).as_deref(), directory.path().to_str());
+        drop(shell.stdin.take());
+        shell.wait().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod hook_config_tests {
+    use super::*;
+
+    #[test]
+    fn installation_preserves_settings_and_existing_hooks_for_each_provider() {
+        for provider in ["Codex", "Claude", "Gemini"] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("settings.json");
+            let script = folder.path().join("hook script.sh");
+            let before = serde_json::json!({"theme":"dark", "permissions":{"allow":["example"]}, "hooks":{"SessionStart":[{"matcher":"resume", "hooks":[{"type":"command","command":"existing"}]}], "Stop":[{"hooks":[{"type":"command","command":"stop"}]}]}});
+            std::fs::write(&path, serde_json::to_vec(&before).unwrap()).unwrap();
+            install_session_hook(&path, &script, provider).unwrap();
+            let after = read_hook_config(&path).unwrap();
+            assert_eq!(after["theme"], before["theme"]);
+            assert_eq!(after["permissions"], before["permissions"]);
+            assert_eq!(after["hooks"]["Stop"], before["hooks"]["Stop"]);
+            assert_eq!(after["hooks"]["SessionStart"][0], before["hooks"]["SessionStart"][0]);
+            assert!(hook_present(&after, &hook_command(provider, &script)));
+            assert_eq!(after["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
+            let written = std::fs::read(&path).unwrap();
+            install_session_hook(&path, &script, provider).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), written);
+        }
+    }
+
+    #[test]
+    fn restricted_hooks_do_not_count_and_bad_configs_are_not_overwritten() {
+        let command = "cubicle hook";
+        let restricted = serde_json::json!({"hooks":{"SessionStart":[{"matcher":"resume", "hooks":[{"type":"command","command":command}]}]}});
+        assert!(!hook_present(&restricted, command));
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("settings.json");
+        let script = folder.path().join("hook.sh");
+        for invalid in ["{ invalid", "{\"hooks\": \"bad\"}", "{\"hooks\": {\"SessionStart\": {}}}"] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(install_session_hook(&path, &script, "Codex").is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+        }
     }
 }

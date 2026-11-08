@@ -1,12 +1,12 @@
-import { matchSessionEvent } from './session-matcher.js';
 import { parseProfile } from './profiles.js';
 import { createDockview, themeDark, DefaultTab } from 'dockview';
 import 'dockview/dist/styles/dockview.css';
 import './style.css';
 import { mountFiles, hasFiles, closeFiles, setFilesRoot, openFileInPane, filePaneDirty, saveFilePane } from './files.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { browserControls, closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
-import { clearTerminalMatchCandidates, closeTerminal, getTerminalMatchCandidates, getTerminalTitle, hasTerminal, isTerminalMatchCurrent, mountTerminal, refreshTerminal } from './terminal.js';
+import { captureTerminalDirectories, closeTerminal, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
 
 const icons = {
   files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -39,60 +39,6 @@ function makeSplitButton(label, direction, paths, referencePanel) {
   return button;
 }
 
-const enterTimingControl = document.getElementById('enter-timing-diagnostics');
-try { enterTimingControl.checked = localStorage.getItem('dockview-enter-timing-diagnostics') === 'true'; } catch { /* Default off. */ }
-enterTimingControl.addEventListener('change', () => {
-  try { localStorage.setItem('dockview-enter-timing-diagnostics', String(enterTimingControl.checked)); } catch { /* Logging remains off if storage is unavailable. */ }
-});
-const chatResumeSetting = 'dockview-chat-resume-startup';
-let chatResumeStartup = true;
-try { chatResumeStartup = localStorage.getItem(chatResumeSetting) !== 'false'; } catch { /* Use the default. */ }
-const chatResumeControl = document.getElementById('chat-resume-startup');
-chatResumeControl.checked = chatResumeStartup;
-chatResumeControl.addEventListener('change', () => {
-  chatResumeStartup = chatResumeControl.checked;
-  try { localStorage.setItem(chatResumeSetting, String(chatResumeStartup)); } catch { /* Use the choice for this run. */ }
-  document.getElementById('chat-hook-section').hidden = !chatResumeStartup;
-  clearTerminalMatchCandidates();
-  sessionObservationStarted = Date.now();
-  if (!chatResumeStartup) { ambiguousSessionEvents.clear(); renderAmbiguousSessions(); }
-  if (chatResumeStartup) void refreshChatHookStatus();
-});
-async function refreshChatHookStatus() {
-  const target = document.getElementById('chat-hook-status');
-  const section = document.getElementById('chat-hook-section');
-  section.hidden = !chatResumeStartup;
-  if (!chatResumeStartup) return;
-  if (!isTauri()) { target.textContent = 'Hook checks are available in the desktop app.'; return; }
-  target.textContent = 'Checking hook configuration…';
-  try {
-    const statuses = await invoke('chat_resume_hook_status');
-    target.replaceChildren(...statuses.map(item => {
-      const row = document.createElement('div');
-      row.className = 'chat-hook-card';
-      const text = document.createElement('div');
-      const name = document.createElement('strong'); name.textContent = item.provider;
-      const path = document.createElement('small'); path.textContent = item.path;
-      const action = document.createElement('div'); action.className = 'chat-hook-actions';
-      const badge = document.createElement('span');
-      badge.className = `chat-hook-badge ${item.state === 'error' ? 'is-error' : item.state === 'installed' ? 'is-installed' : 'is-muted'}`;
-      badge.textContent = item.state === 'error' ? 'Cannot check' : item.state === 'installed' ? 'Configured' : 'Not configured';
-      badge.title = item.detail; action.append(badge);
-      if (item.state === 'missing') {
-        const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Add hook';
-        button.onclick = async () => {
-          button.disabled = true;
-          try { await invoke('chat_resume_install_hook', { provider: item.provider }); await refreshChatHookStatus(); }
-          catch (error) { const message = document.createElement('small'); message.className = 'chat-hook-error'; message.textContent = String(error); text.append(message); button.disabled = false; }
-        };
-        action.append(button);
-      }
-      text.append(name, path); row.append(text, action);
-      return row;
-    }));
-  } catch (error) { target.textContent = `Could not check hooks: ${error}`; }
-}
-document.getElementById('chat-hook-refresh').addEventListener('click', refreshChatHookStatus);
 const pendingProfileCommands = new Map();
 
 class DemoPane {
@@ -122,43 +68,18 @@ class DemoPane {
           <div class="tool-grid">
             <button class="tool-choice" data-tool="files" type="button"><span class="tool-icon">${icon('files')}</span><span class="tool-copy"><strong>Files</strong><small>Explore and preview files</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
             <button class="tool-choice" data-tool="terminal" type="button"><span class="tool-icon">${icon('terminal')}</span><span class="tool-copy"><strong>Terminal</strong><small>Work in a command line</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
-            <button class="tool-choice" data-tool="agent" type="button"><span class="tool-icon">${icon('terminal')}</span><span class="tool-copy"><strong>Resume AI session</strong><small>Restore a conversation by session ID</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
           </div>
 
         </div>
       </div>`;
       content.querySelectorAll('[data-tool]').forEach((button) => {
-        button.addEventListener('click', () => button.dataset.tool === 'agent' ? showAgentSetup() : button.dataset.tool === 'terminal' ? showTerminal() : button.dataset.tool === 'files' ? showFiles() : showBrowser());
+        button.addEventListener('click', () => button.dataset.tool === 'terminal' ? showTerminal() : button.dataset.tool === 'files' ? showFiles() : showBrowser());
       });
       content.querySelector('form').addEventListener('submit', (event) => {
         event.preventDefault();
         const value = content.querySelector('input').value.trim();
         if (value) showBrowser(value);
       });
-    };
-    const showAgentSetup = () => {
-      content.replaceChildren();
-      const form = document.createElement('form');
-      form.className = 'start-inner agent-session-form';
-      form.innerHTML = `<h2>Resume an AI session</h2><p>Enter the exact session ID. This tab will reopen that conversation when the app starts.</p><label>CLI <select name="provider"><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="gemini">Gemini CLI</option></select></label><label>Session ID <input name="sessionId" required placeholder="Session UUID" autocomplete="off" spellcheck="false"></label><p class="agent-error" role="alert"></p><button type="submit">Resume session</button> <button type="button" class="agent-cancel">Cancel</button>`;
-      form.querySelector('.agent-cancel').onclick = showStart;
-      form.onsubmit = async (event) => {
-        event.preventDefault();
-        const provider = form.elements.provider.value;
-        const sessionId = form.elements.sessionId.value.trim();
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
-          form.querySelector('.agent-error').textContent = 'Enter a valid session UUID.'; return;
-        }
-        let cwd = currentSpacePath();
-        if (!cwd) {
-          try { cwd = (await invoke('list_files', { path: null })).path; }
-          catch (error) { form.querySelector('.agent-error').textContent = `Cannot determine the working directory: ${error}`; return; }
-        }
-        api.updateParameters({ ...api.getParameters(), agentSession: { provider, sessionId, cwd } });
-        showTerminal(true);
-        window.dispatchEvent(new Event('space-content-change'));
-      };
-      content.append(form);
     };
     const showPlaceholder = (tool, address = '') => {
       const title = { files: 'Files', terminal: 'Terminal', browser: 'Browser' }[tool];
@@ -183,19 +104,16 @@ class DemoPane {
       content.replaceChildren();
       mountBrowser(api.id, content, api, address, params.profileFavorites || []);
     };
-    const showTerminal = (startLinkedSession = false) => {
+    const showTerminal = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'terminal' });
       api.setTitle(api.getParameters().terminalName || 'Terminal');
       content.classList.add('terminal-content');
       content.replaceChildren();
-      const binding = api.getParameters().agentSession;
-      const validBinding = binding && ['codex', 'claude', 'gemini'].includes(binding.provider) && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(binding.sessionId);
-      const resumeCommand = validBinding && (chatResumeStartup || startLinkedSession) ? `${binding.provider} ${binding.provider === 'codex' ? 'resume' : '--resume'} ${binding.sessionId}` : null;
-      const startupCommand = resumeCommand || pendingProfileCommands.get(api.id);
+      const startupCommand = pendingProfileCommands.get(api.id);
       pendingProfileCommands.delete(api.id);
-      mountTerminal(api.id, content, (validBinding ? binding.cwd : params.profileCwd) || currentSpacePath(), (title) => {
+      mountTerminal(api.id, content, api.getParameters().terminalCwd || params.agentSession?.cwd || params.profileCwd || currentSpacePath(), (title) => {
         if (!api.getParameters().terminalName) api.setTitle(title || 'Terminal');
-      }, (path, cwd) => void handleTerminalFileLink(path, cwd, api.id), { shell: params.profileShell, env: params.profileEnv, command: startupCommand });
+      }, (path, cwd) => void handleTerminalFileLink(path, cwd, api.id), { shell: params.profileShell, env: params.profileEnv, command: startupCommand, savedCwd: !!(api.getParameters().terminalCwd || params.agentSession?.cwd), fallbackCwd: params.profileCwd || currentSpacePath(), onCwdChange: cwd => saveTerminalCwd(api.id, cwd) });
     };
     if (hasTerminal(api.id) || params.tool === 'terminal') showTerminal(); else if (hasBrowser(api.id) || params.tool === 'browser') showBrowser(params.address || ''); else if (hasFiles(api.id) || params.tool === 'files') showFiles(); else showStart();
     this.element.append(toolbar, content);
@@ -203,7 +121,7 @@ class DemoPane {
   onShow() { refreshTerminal(this.id); refreshBrowser(this.id); }
 }
 
-const terminalCloseSetting = 'dockview-confirm-terminal-close';
+const terminalCloseSetting = 'cubicle-confirm-terminal-close';
 let confirmTerminalClose = localStorage.getItem(terminalCloseSetting) !== 'false';
 const terminalCloseControl = document.getElementById('confirm-terminal-close');
 terminalCloseControl.checked = confirmTerminalClose;
@@ -317,7 +235,7 @@ class WorkspaceTab extends DefaultTab {
       if (url && /^(https?:|data:image\/)/i.test(url)) {
         if (this.favicon.getAttribute('src') !== url) { this.favicon.hidden = false; this.favicon.src = url; }
       } else { this.favicon.hidden = true; this.favicon.removeAttribute('src'); }
-      this.element.title = data.tool === 'terminal' ? [data.agentSession ? `Linked ${data.agentSession.provider} session: ${data.agentSession.sessionId}` : 'No session linked', 'Double-click to rename terminal; clear the name to follow the terminal title'].join('\n') : (this.api.title || '');
+      this.element.title = data.tool === 'terminal' ? 'Double-click to rename terminal; clear the name to follow the terminal title' : (this.api.title || '');
     };
     this.paramSubscription = this.api.onDidParametersChange(this.refresh);
     this.rename = (event) => {
@@ -408,10 +326,35 @@ async function handleTerminalFileLink(raw, cwd, terminalId) {
 }
 window.addEventListener('beforeunload', event => { if (dock.panels.some(panel => filePaneDirty(panel.id))) { event.preventDefault(); event.returnValue = ''; } });
 const retainedPanels = new Set();
-const spacesKey = 'dockview-spaces-v1';
+const spacesKey = 'cubicle-spaces-v1';
 let spaces = [], activeSpaceId = null, switchingSpace = false, saveTimer;
 const spacesList = document.getElementById('spaces-list');
 const spaceSearch = document.getElementById('space-search');
+let spaceSort = localStorage.getItem('cubicle-space-sort') || 'recent';
+let showSpacePaths = localStorage.getItem('cubicle-space-show-paths') !== 'false';
+const spacesMenu = document.getElementById('spaces-menu');
+const spaceContextMenu = document.getElementById('space-context-menu');
+const notificationPanel = document.getElementById('space-notification-panel');
+function closeSidebarPopups() {
+  spacesMenu.hidden = spaceContextMenu.hidden = notificationPanel.hidden = true;
+  document.getElementById('spaces-menu-toggle').setAttribute('aria-expanded', 'false');
+  document.getElementById('space-notifications').setAttribute('aria-expanded', 'false');
+}
+function sidebarMenuButton(label, action) { const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.onclick = action; return button; }
+function toggleSpaceSearch(forceOpen = false) {
+  spaceSearch.hidden = forceOpen ? false : !spaceSearch.hidden;
+  document.getElementById('space-search-toggle').setAttribute('aria-expanded', String(!spaceSearch.hidden));
+  if (!spaceSearch.hidden) spaceSearch.focus(); else { spaceSearch.value = ''; renderSpaces(); }
+}
+function showSpaceContextMenu(space, x, y, opener) {
+  closeSidebarPopups(); spaceContextMenu.replaceChildren();
+  spaceContextMenu.append(sidebarMenuButton('Open space', () => { closeSidebarPopups(); switchSpace(space.id); }), sidebarMenuButton('Edit space…', () => { closeSidebarPopups(); openSpaceDialog(space, opener); }));
+  spaceContextMenu.hidden = false;
+  spaceContextMenu.style.left = `${Math.max(4, Math.min(x, innerWidth - spaceContextMenu.offsetWidth - 4))}px`;
+  spaceContextMenu.style.top = `${Math.max(4, Math.min(y, innerHeight - spaceContextMenu.offsetHeight - 4))}px`;
+  spaceContextMenu.querySelector('button').focus();
+}
+
 function currentSpacePath() { return spaces.find(space => space.id === activeSpaceId)?.path || null; }
 function displaySpacePath(path) { return path?.startsWith('\\\\?\\UNC\\') ? '\\\\' + path.slice(8) : path?.startsWith('\\\\?\\') ? path.slice(4) : path; }
 function persistSpaces() {
@@ -424,104 +367,44 @@ function saveActiveSpace() {
   if (space) { space.layout = dock.toJSON(); persistSpaces(); }
 }
 function panelIds(layout) { return Object.keys(layout?.panels || {}); }
-// Poll only our own configured hook logs; do not replay events from before app startup.
-let sessionObservationStarted = Date.now();
-const ambiguousSessionEvents = new Map();
-const observedHookEvents = new Set();
-let matchingHookEvents = false;
-function saveSessionBinding(candidate, binding) {
-  if (!chatResumeStartup || !isTerminalMatchCurrent(candidate.paneId, candidate.terminalId)) return false;
-  const panel = dock.getPanel(candidate.paneId);
+function saveTerminalCwd(paneId, cwd) {
+  const panel = dock.getPanel(paneId);
   if (panel?.api.getParameters().tool === 'terminal') {
-    panel.api.updateParameters({ ...panel.api.getParameters(), agentSession: binding });
-    saveActiveSpace(); return true;
-  }
-  const space = spaces.find(item => item.id !== activeSpaceId && item.layout?.panels?.[candidate.paneId]);
-  const savedPanel = space?.layout?.panels?.[candidate.paneId];
-  if (savedPanel?.params?.tool !== 'terminal') return false;
-  savedPanel.params.agentSession = binding; persistSpaces(); return true;
-}
-function renderAmbiguousSessions() {
-  const container = document.getElementById('session-match-choices');
-  document.getElementById('session-match-alert').hidden = ambiguousSessionEvents.size === 0;
-  container.replaceChildren();
-  for (const [key, pending] of ambiguousSessionEvents) {
-    const row = document.createElement('div'); row.className = 'session-match-choice';
-    const label = document.createElement('span'); label.textContent = `Choose the terminal for ${pending.binding.provider} session ${pending.binding.sessionId.slice(0, 8)}…`;
-    const select = document.createElement('select'); select.setAttribute('aria-label', 'Terminal for session');
-    const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Choose terminal…'; select.append(placeholder);
-    pending.matches.forEach((candidate, index) => {
-      const option = document.createElement('option'); option.value = String(index);
-      option.textContent = dock.getPanel(candidate.paneId)?.api.title || candidate.paneId;
-      option.textContent += ` (${candidate.paneId.slice(-8)})`;
-      select.append(option);
-    });
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Link';
-    button.onclick = () => {
-      if (select.value === '') return;
-      if (saveSessionBinding(pending.matches[Number(select.value)], pending.binding)) { ambiguousSessionEvents.delete(key); renderAmbiguousSessions(); }
-      else label.textContent = 'This terminal is no longer running.';
-    };
-    row.append(label, select, button); container.append(row);
-  }
-}
-
-async function matchRecentSessions() {
-  if (!chatResumeStartup || !isTauri() || matchingHookEvents) return;
-  matchingHookEvents = true;
-  try {
-    const candidates = getTerminalMatchCandidates();
-    if (!candidates.length) return;
-    const events = await invoke('chat_resume_recent_hooks');
-    const pending = events.filter(event => {
-      const t = Date.parse(event?.receivedAt);
-      const key = `${event?.provider}|${event?.event?.session_id}|${event?.receivedAt}`;
-      return Number.isFinite(t) && t >= sessionObservationStarted && Date.now() - t < 30000 && !observedHookEvents.has(key);
-    });
-    if (!pending.length) return;
-    const checked = await Promise.all(candidates.map(async c => {
-      try { return { ...c, providers: await invoke('terminal_agent_kinds', { id: c.terminalId }) }; }
-      catch (error) { console.warn('Could not identify terminal CLI:', error); return { ...c, providers: [] }; }
-    }));
-    if (!chatResumeStartup) return;
-    for (const event of pending.sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt))) {
-      const key = `${event?.provider}|${event?.event?.session_id}|${event?.receivedAt}`;
-      const result = matchSessionEvent(event, checked.filter(c => isTerminalMatchCurrent(c.paneId, c.terminalId)));
-      if (result.status === 'matched') {
-        if (saveSessionBinding(result.candidate, result.binding)) observedHookEvents.add(key);
-      } else if (result.status === 'ambiguous' || result.status === 'invalid') {
-        observedHookEvents.add(key);
-        if (result.status === 'ambiguous') { ambiguousSessionEvents.set(key, { matches: result.matches, binding: { provider: event.provider.toLowerCase(), sessionId: event.event.session_id, cwd: event.event.cwd } }); renderAmbiguousSessions(); }
-      }
+    if (panel.api.getParameters().terminalCwd !== cwd) {
+      panel.api.updateParameters({ ...panel.api.getParameters(), terminalCwd: cwd });
+      saveActiveSpace();
     }
-    if (observedHookEvents.size > 2000) observedHookEvents.clear();
-  } catch (error) { console.error('Could not match CLI sessions:', error); }
-  finally { matchingHookEvents = false; }
+    return;
+  }
+  const space = spaces.find(item => item.id !== activeSpaceId && item.layout?.panels?.[paneId]);
+  const savedPanel = space?.layout?.panels?.[paneId];
+  if (savedPanel?.params?.tool === 'terminal' && savedPanel.params.terminalCwd !== cwd) {
+    savedPanel.params.terminalCwd = cwd;
+    persistSpaces();
+  }
 }
-if (isTauri()) setInterval(matchRecentSessions, 1500);
 
 function renderSpaces() {
   spacesList.replaceChildren();
+  document.getElementById('space-count').textContent = `· ${spaces.length}`;
   const query = spaceSearch.value.trim().toLocaleLowerCase();
-  for (const space of spaces.filter(item => item.name.toLocaleLowerCase().includes(query))) {
+  const visible = spaces.filter(item => `${item.name} ${displaySpacePath(item.path) || ''}`.toLocaleLowerCase().includes(query));
+  visible.sort(spaceSort === 'name' ? (a, b) => a.name.localeCompare(b.name) : (a, b) => (b.lastOpened || 0) - (a.lastOpened || 0));
+  for (const space of visible) {
     const row = document.createElement('div'); row.className = 'space-row';
     const select = document.createElement('button'); select.type = 'button'; select.className = 'space-select';
-    const dot = document.createElement('span'); dot.className = 'space-dot'; dot.setAttribute('aria-hidden', 'true');
-    const colors = ['#89a8f8', '#80d6bb', '#e6b37a', '#d29ce2'];
-    const colorIndex = [...space.id].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0) % colors.length;
-    dot.style.backgroundColor = space.color || colors[colorIndex];
-    const label = document.createElement('span'); label.className = 'space-name'; label.textContent = space.name;
-    select.append(dot, label); select.title = space.path ? `${space.name} — ${displaySpacePath(space.path)}` : `${space.name} — Home folder`;
+    const folder = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); folder.setAttribute('viewBox', '0 0 24 24'); folder.setAttribute('fill', 'none'); folder.setAttribute('stroke', 'currentColor'); folder.setAttribute('stroke-width', '1.7'); folder.setAttribute('aria-hidden', 'true'); folder.classList.add('space-folder');
+    const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path'); shape.setAttribute('d', 'M3 5.5h6l2 2h10v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'); folder.append(shape); folder.style.color = currentSpaceColor(space);
+    const labels = document.createElement('span'); labels.className = 'space-label'; const name = document.createElement('span'); name.className = 'space-name'; name.textContent = space.name; labels.append(name);
+    if (showSpacePaths) { const path = document.createElement('span'); path.className = 'space-path'; path.textContent = displaySpacePath(space.path) || 'Home folder'; labels.append(path); }
+    select.append(folder, labels); select.title = `${space.name} — ${displaySpacePath(space.path) || 'Home folder'}`;
     if (space.id === activeSpaceId) select.setAttribute('aria-current', 'true');
-    select.addEventListener('click', () => switchSpace(space.id));
-    const settings = document.createElement('button'); settings.type = 'button'; settings.className = 'space-settings';
-    settings.textContent = '⚙'; settings.title = `Edit ${space.name}`; settings.setAttribute('aria-label', `Edit ${space.name}`);
-    settings.onclick = () => openSpaceDialog(space, settings);
-    row.append(select, settings); spacesList.append(row);
+    select.onclick = () => switchSpace(space.id);
+    row.oncontextmenu = event => { event.preventDefault(); showSpaceContextMenu(space, event.clientX, event.clientY, select); };
+    select.onkeydown = event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = select.getBoundingClientRect(); showSpaceContextMenu(space, rect.left, rect.bottom, select); } };
+    row.append(select); spacesList.append(row);
   }
-  if (!spacesList.children.length) {
-    const empty = document.createElement('div'); empty.className = 'spaces-empty'; empty.textContent = 'No spaces match your search.'; spacesList.append(empty);
-  }
+  if (!visible.length) { const empty = document.createElement('div'); empty.className = 'spaces-empty'; empty.textContent = 'No spaces match your search.'; spacesList.append(empty); }
 }
 function switchSpace(id) {
   if (id === activeSpaceId) return;
@@ -530,6 +413,7 @@ function switchSpace(id) {
   for (const panelId of panelIds(oldSpace?.layout)) retainedPanels.add(panelId);
   activeSpaceId = id;
   const space = spaces.find(item => item.id === id);
+  space.lastOpened = Date.now();
   switchingSpace = true;
   try { if (space.layout) dock.fromJSON(space.layout); else { dock.clear(); add(); } }
   catch (error) { console.error('Unable to restore space', error); dock.clear(); add(); }
@@ -555,8 +439,23 @@ function initializeSpaces() {
 }
 function addSpace(event) { openSpaceDialog(null, event.currentTarget); }
 document.getElementById('space-add').addEventListener('click', addSpace);
-document.getElementById('space-add-secondary').addEventListener('click', addSpace);
 spaceSearch.addEventListener('input', renderSpaces);
+document.getElementById('space-search-toggle').onclick = () => { closeSidebarPopups(); toggleSpaceSearch(); };
+document.getElementById('spaces-menu-toggle').onclick = event => {
+  event.stopPropagation(); const opening = spacesMenu.hidden; closeSidebarPopups(); if (!opening) return;
+  spacesMenu.replaceChildren(); const label = document.createElement('div'); label.className = 'sidebar-menu-label'; label.textContent = 'Sort spaces'; spacesMenu.append(label);
+  for (const [value, name] of [['recent', 'Recent first'], ['name', 'Name A–Z']]) spacesMenu.append(sidebarMenuButton(`${spaceSort === value ? '✓ ' : ''}${name}`, () => { spaceSort = value; localStorage.setItem('cubicle-space-sort', value); closeSidebarPopups(); renderSpaces(); }));
+  spacesMenu.append(sidebarMenuButton(`${showSpacePaths ? '✓ ' : ''}Show folder paths`, () => { showSpacePaths = !showSpacePaths; localStorage.setItem('cubicle-space-show-paths', String(showSpacePaths)); closeSidebarPopups(); renderSpaces(); }), sidebarMenuButton('Search spaces', () => { closeSidebarPopups(); toggleSpaceSearch(true); }), sidebarMenuButton('New space', () => { closeSidebarPopups(); openSpaceDialog(null, document.getElementById('spaces-menu-toggle')); }));
+  spacesMenu.hidden = false; event.currentTarget.setAttribute('aria-expanded', 'true');
+};
+document.getElementById('space-notifications').onclick = event => {
+  event.stopPropagation(); const opening = notificationPanel.hidden; closeSidebarPopups(); if (!opening) return;
+  notificationPanel.replaceChildren(); const title = document.createElement('strong'); title.textContent = 'Notifications'; const message = document.createElement('p'); message.textContent = 'No notifications.'; notificationPanel.append(title, message);
+  notificationPanel.hidden = false; event.currentTarget.setAttribute('aria-expanded', 'true');
+};
+document.addEventListener('click', event => { if (!event.target.closest('.sidebar-popup') && !event.target.closest('#spaces-menu-toggle') && !event.target.closest('#space-notifications')) closeSidebarPopups(); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSidebarPopups(); });
+
 const spaceDialog = document.getElementById('space-dialog');
 const spaceForm = document.getElementById('space-form');
 const spaceNameInput = document.getElementById('space-dialog-name');
@@ -671,7 +570,7 @@ initializeSpaces();
 const appearanceDefaults = { chrome: 'integrated', softTabs: true, blueOutline: true, compactCards: true };
 let appearance = { ...appearanceDefaults };
 try {
-  const saved = JSON.parse(localStorage.getItem('dockview-pane-appearance-v2') || '{}');
+  const saved = JSON.parse(localStorage.getItem('cubicle-pane-appearance-v2') || '{}');
   if (saved.chrome === 'two-row' || saved.chrome === 'integrated') appearance.chrome = saved.chrome;
   for (const key of ['softTabs', 'blueOutline', 'compactCards']) {
     if (typeof saved[key] === 'boolean') appearance[key] = saved[key];
@@ -690,7 +589,7 @@ function applyAppearance() {
   document.body.classList.toggle('compact-cards', appearance.compactCards);
   appearanceControls.chrome.value = appearance.chrome;
   for (const key of ['softTabs', 'blueOutline', 'compactCards']) appearanceControls[key].checked = appearance[key];
-  try { localStorage.setItem('dockview-pane-appearance-v2', JSON.stringify(appearance)); } catch { /* Preferences remain usable for this session. */ }
+  try { localStorage.setItem('cubicle-pane-appearance-v2', JSON.stringify(appearance)); } catch { /* Preferences remain usable for this session. */ }
 }
 for (const [key, control] of Object.entries(appearanceControls)) {
   control.addEventListener('change', () => {
@@ -755,8 +654,8 @@ const sidebarToggle = document.getElementById('sidebar-toggle');
 const sidebarDivider = document.getElementById('sidebar-divider');
 let sidebarOpen = true, sidebarWidth = 240;
 try {
-  sidebarOpen = localStorage.getItem('dockview-sidebar-open') !== 'false';
-  const savedWidth = Number(localStorage.getItem('dockview-sidebar-width'));
+  sidebarOpen = localStorage.getItem('cubicle-sidebar-open') !== 'false';
+  const savedWidth = Number(localStorage.getItem('cubicle-sidebar-width'));
   if (savedWidth >= 160 && savedWidth <= 480) sidebarWidth = savedWidth;
 } catch { /* Use defaults when storage is unavailable. */ }
 function setSidebarWidth(width) {
@@ -769,8 +668,8 @@ function setSidebarWidth(width) {
 }
 function saveSidebar() {
   try {
-    localStorage.setItem('dockview-sidebar-open', String(sidebarOpen));
-    localStorage.setItem('dockview-sidebar-width', String(sidebarWidth));
+    localStorage.setItem('cubicle-sidebar-open', String(sidebarOpen));
+    localStorage.setItem('cubicle-sidebar-width', String(sidebarWidth));
   } catch { /* Keep the current state for this session. */ }
 }
 function applySidebar() {
@@ -825,7 +724,6 @@ function openSettings(section, opener) {
   settingsOpener = opener;
   closeMenus();
   settingsPage.hidden = false;
-  void refreshChatHookStatus();
   document.body.classList.add('settings-open');
   document.getElementById('dock').inert = true;
   appSidebar.inert = true;
@@ -848,16 +746,15 @@ function closeSettings() {
 document.getElementById('menu-settings').addEventListener('click', () => openSettings(null, document.querySelector('.app-menu:nth-of-type(2) > summary')));
 document.getElementById('menu-pane-settings').addEventListener('click', () => openSettings('settings-appearance', document.querySelector('.app-menu:nth-of-type(3) > summary')));
 document.getElementById('menu-terminal-settings').addEventListener('click', () => openSettings('settings-terminal', document.querySelector('.app-menu:nth-of-type(3) > summary')));
-document.getElementById('session-match-alert').addEventListener('click', () => openSettings('settings-terminal', document.getElementById('session-match-alert')));
 settingsClose.addEventListener('click', closeSettings);
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !settingsPage.hidden && !menus.some(menu => menu.open)) { event.preventDefault(); closeSettings(); } });
 
 // Profiles are stored independently of spaces and their live pane IDs.
 const profileSelect = document.getElementById('profile-select'), profileJson = document.getElementById('profile-json'), profileStatus = document.getElementById('profile-status');
 let profiles = [], profileIndex = 0, profileDirty = false;
-try { const saved = JSON.parse(localStorage.getItem('dockview-launch-profiles-v1') || '[]'); if (Array.isArray(saved)) profiles = saved.filter(p => { try { parseProfile(p); return true; } catch { return false; } }); } catch { /* Use a default. */ }
+try { const saved = JSON.parse(localStorage.getItem('cubicle-launch-profiles-v1') || '[]'); if (Array.isArray(saved)) profiles = saved.filter(p => { try { parseProfile(p); return true; } catch { return false; } }); } catch { /* Use a default. */ }
 if (!profiles.length) profiles = [{ name: 'My profile', panes: ['terminal', 'files'] }];
-function persistProfiles() { try { localStorage.setItem('dockview-launch-profiles-v1', JSON.stringify(profiles)); return true; } catch { profileStatus.textContent = 'Could not save profiles to local storage.'; return false; } }
+function persistProfiles() { try { localStorage.setItem('cubicle-launch-profiles-v1', JSON.stringify(profiles)); return true; } catch { profileStatus.textContent = 'Could not save profiles to local storage.'; return false; } }
 function renderProfilePreview() {
   const preview = document.getElementById('profile-preview');
   const error = document.getElementById('profile-preview-error');
@@ -917,3 +814,23 @@ async function launchProfile() {
 }
 document.getElementById('profile-launch').onclick = () => { void launchProfile().catch(e => { profileStatus.textContent = `Launch failed: ${e.message}`; }); };
 renderProfiles();
+
+if (isTauri()) {
+  let closing = false;
+  const appWindow = getCurrentWindow();
+  appWindow.onCloseRequested(async event => {
+    event.preventDefault();
+    if (closing) return;
+    if (dock.panels.some(panel => filePaneDirty(panel.id)) && !confirm('You have unsaved Markdown changes. Close Cubicle and discard them?')) return;
+    closing = true;
+    try {
+      await captureTerminalDirectories();
+      saveActiveSpace();
+      await appWindow.destroy();
+    } catch (error) {
+      closing = false;
+      console.error('Could not close Cubicle:', error);
+      alert(`Could not close Cubicle: ${error}`);
+    }
+  }).catch(error => console.error('Could not register close handler:', error));
+}

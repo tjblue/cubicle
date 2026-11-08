@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Dockview Desktop",
+  "productName": "Cubicle",
   "version": "0.1.0",
-  "identifier": "com.cliviewer.dockviewdemo",
+  "identifier": "com.cubicle.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:4179",
@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "Dockview Desktop", "width": 1280, "height": 800, "minWidth": 640, "minHeight": 480, "dragDropEnabled": false }],
+    "windows": [{ "title": "Cubicle", "width": 1280, "height": 800, "minWidth": 640, "minHeight": 480, "dragDropEnabled": false }],
     "security": { "csp": "default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:4179" }
   },
   "bundle": { "active": false }
