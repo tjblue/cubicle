@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attention indicators · Cubicle playground</title>
+<link rel="stylesheet" href="./attention-playground.css">
+</head>
+<body>
+<header class="page-header"><div><div class="eyebrow">CUBICLE / INTERACTION STUDY</div><h1>A little signal, right where you need it.</h1><p>Try a quiet way to know when a terminal needs your attention.</p></div><button id="reset" class="secondary">Reset sample</button></header>
+<main class="layout">
+<section class="preview" aria-label="Workspace preview">
+<div class="section-heading"><div><div class="eyebrow">INTERACTIVE PREVIEW</div><h2>Your workspace</h2></div><span class="sample">SAMPLE DATA</span></div>
+<div class="window"><div class="menubar"><span class="menu-icon">◧</span><span>File</span><span>Edit</span><span>View</span><span>Help</span><span class="window-title">Cubicle</span><span class="window-actions">− &nbsp; □ &nbsp; ×</span></div><div class="workspace"><aside class="sidebar"><div class="brand"><span class="brand-icon">⌘</span> Workspace</div><div class="side-label">SPACES <span>＋</span></div><div id="spaces"></div><div class="sidebar-foot"><span class="legend-dot"></span> Something needs a look</div></aside><div class="canvas"><div id="tabs" class="tabs" role="tablist" aria-label="Terminal tabs"></div><div class="terminal-head"><div><span class="terminal-icon">›_</span><span id="terminal-title"></span><span class="terminal-sub">TERMINAL</span></div><div class="bell-wrap"><button id="bell" class="bell" aria-haspopup="true" aria-expanded="false" aria-label="Terminal notification settings" title="Terminal notification settings"></button><div id="bell-menu" class="bell-menu" hidden><strong>Notify me about</strong><p>For this terminal only</p><label><input type="checkbox" id="agent-toggle"> AI needs input</label><label><input type="checkbox" id="command-toggle"> Command finishes</label><div class="menu-note">Flags appear on the tab and space.</div></div></div></div><div id="terminal" class="terminal" role="tabpanel"></div><div class="terminal-bottom"><span><span class="online"></span> Connected</span><span id="terminal-status">PowerShell</span></div></div></div></div>
+<div class="preview-foot"><span><span class="legend-dot"></span> Needs your attention</span><span id="feedback" role="status" aria-live="polite">Pick a terminal and try the bell.</span></div>
+</section>
+<aside class="controls"><div class="eyebrow">TRY IT OUT</div><h2>Make something happen</h2><p>These controls simulate activity in any terminal, even when you’re viewing another space.</p><label for="target">SEND AN EVENT TO</label><select id="target"></select><div class="event-buttons"><button id="agent-event"><span class="event-icon purple">✳</span><span><strong>AI needs input</strong><small>Simulate a prompt or approval</small></span><span class="arrow">↗</span></button><button id="command-event"><span class="event-icon blue">✓</span><span><strong>Command finished</strong><small>Simulate a completed command</small></span><span class="arrow">↗</span></button></div><div class="how"><h3>How this sample works</h3><ol><li>Open a terminal and use its bell to choose what to watch.</li><li>Switch to another tab or space, then simulate an event.</li><li>Follow the flags back to the terminal. Opening it clears the flag.</li></ol></div><div class="notice"><span>✦</span><p><strong>Just a playground.</strong><br>No real terminals, AI sessions, or system notifications are connected.</p></div></aside>
+</main><script type="module" src="./attention-playground.js"></script>
+</body></html>

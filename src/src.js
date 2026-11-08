@@ -94,15 +94,17 @@ class DemoPane {
       api.updateParameters({ ...api.getParameters(), tool: 'files' });
       api.setTitle('Files');
       content.replaceChildren();
-      mountFiles(api.id, content, showStart, params.profileRoot || currentSpacePath(), params.profilePins || []);
-      if (params.openFile) { openFileInPane(api.id, params.openFile); params.openFile = undefined; }
+      mountFiles(api.id, content, showStart, params.filesRoot || params.profileRoot || currentSpacePath(), params.profilePins || [], {
+        preview: params.filesPreview || params.openFile,
+        onStateChange: state => savePaneState(api.id, 'files', { filesRoot: state.root, filesPreview: state.preview, openFile: undefined }),
+      });
     };
     const showBrowser = (address = '') => {
       api.updateParameters({ ...api.getParameters(), tool: 'browser', address });
       api.setTitle('Browser');
       content.classList.add('browser-content');
       content.replaceChildren();
-      mountBrowser(api.id, content, api, address, params.profileFavorites || []);
+      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state));
     };
     const showTerminal = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'terminal' });
@@ -367,6 +369,20 @@ function saveActiveSpace() {
   if (space) { space.layout = dock.toJSON(); persistSpaces(); }
 }
 function panelIds(layout) { return Object.keys(layout?.panels || {}); }
+function savePaneState(paneId, tool, state) {
+  const panel = dock.getPanel(paneId);
+  if (panel?.api.getParameters().tool === tool) {
+    panel.api.updateParameters({ ...panel.api.getParameters(), ...state });
+    if (!switchingSpace) saveActiveSpace();
+    return;
+  }
+  const space = spaces.find(item => item.id !== activeSpaceId && item.layout?.panels?.[paneId]);
+  const savedPanel = space?.layout?.panels?.[paneId];
+  if (savedPanel?.params?.tool === tool) {
+    Object.assign(savedPanel.params, state);
+    persistSpaces();
+  }
+}
 function saveTerminalCwd(paneId, cwd) {
   const panel = dock.getPanel(paneId);
   if (panel?.api.getParameters().tool === 'terminal') {

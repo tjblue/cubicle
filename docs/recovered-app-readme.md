@@ -20,6 +20,8 @@ npm run desktop:dev
 
 Drag tabs to split or regroup panes, drag dividers to resize, or use the buttons to add panes and reset the layout. `npm run desktop:build` builds an executable without an installer. `npm run dev` runs the interface in a browser.
 
+Spaces remember each Files pane's current folder and selected preview, and each Browser pane's last reported page URL. These reopen with the saved layout after restarting Cubicle. If a folder or file is unavailable, the Files pane shows an error; you can choose another folder or file. Unsaved Markdown edits and browser history are not restored.
+
 Use **Edit → Settings** (or **View → Pane appearance**) to choose split controls in the tab strip or a separate toolbar, and to toggle soft tabs, the active-group outline, and compact new-tab cards. These preferences are saved locally.
 
 Right-click a tab to create a named tab group or add it to an existing group. The same menu lets you rename or recolor a group, remove a tab, or ungroup all its tabs. Group membership is saved with each space.
