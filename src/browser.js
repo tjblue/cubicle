@@ -22,7 +22,7 @@ export function browserControls(disabled = false) {
   return `<div class="browser-controls"><button type="button" data-action="back" title="Back" aria-label="Back"${inactive}>←</button><button type="button" data-action="forward" title="Forward" aria-label="Forward"${inactive}>→</button><button type="button" data-action="reload" title="Reload" aria-label="Reload"${inactive}>⟳</button><form role="search"><input aria-label="Search or enter address" placeholder="Search or enter address" spellcheck="false" autocomplete="off"></form></div>`;
 }
 export function hasBrowser(id) { return sessions.has(id); }
-export function mountBrowser(id, container, api, initial = '', favorites = [], onStateChange) {
+export function mountBrowser(id, container, api, initial = '', favorites = [], onStateChange, restored = false) {
   let s = sessions.get(id);
   if (s) { container.append(s.element); s.api = api; s.onStateChange = onStateChange; api.setTitle(s.title); sync(s); return; }
   const element = document.createElement('div');
@@ -36,7 +36,10 @@ export function mountBrowser(id, container, api, initial = '', favorites = [], o
   element.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); navigate(s, s.input.value); });
   element.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => { if (s.created) invoke('browser_action', { id, action: button.dataset.action }).catch(error => showError(s, error)); }));
   if (!isTauri()) s.message.textContent = 'Open the desktop app to use the browser.';
-  else if (initial) navigate(s, initial);
+  else if (initial && restored) {
+    s.input.value = initial;
+    s.message.replaceChildren('Saved page paused. ', Object.assign(document.createElement('button'), { type: 'button', textContent: 'Load page', onclick: () => navigate(s, s.input.value) }));
+  } else if (initial) navigate(s, initial);
   else s.input.focus();
 }
 function showError(s, error) { if (!s.closed) { s.message.textContent = `Browser error: ${error}`; s.message.hidden = false; } }

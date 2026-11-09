@@ -40,6 +40,7 @@ function makeSplitButton(label, direction, paths, referencePanel) {
 }
 
 const pendingProfileCommands = new Map();
+const attentionPanes = new Map();
 
 class DemoPane {
   constructor() {
@@ -55,10 +56,17 @@ class DemoPane {
     for (const [label, direction, paths] of splitActions) {
       toolbar.append(makeSplitButton(label, direction, paths, () => api.id));
     }
+    const bell = document.createElement('button');
+    bell.type = 'button'; bell.className = 'pane-action terminal-attention-toggle';
+    bell.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-2.5 7-2.5 8.5h17C20.5 15 18 15 18 8ZM10 20h4"/></svg>';
+    const refreshBell = () => { const enabled = !!api.getParameters().attentionEnabled; bell.hidden = api.getParameters().tool !== 'terminal'; bell.classList.toggle('enabled', enabled); bell.setAttribute('aria-pressed', String(enabled)); bell.setAttribute('aria-label', enabled ? 'Disable terminal attention alerts' : 'Enable terminal attention alerts'); bell.title = enabled ? 'Terminal attention alerts on' : 'Terminal attention alerts off'; };
+    bell.onclick = () => { api.updateParameters({ ...api.getParameters(), attentionEnabled: !api.getParameters().attentionEnabled }); refreshBell(); if (!api.getParameters().attentionEnabled) clearAttention(api.id); window.dispatchEvent(new Event('space-content-change')); };
+    toolbar.append(bell);
     const content = document.createElement('div');
     content.className = 'pane-content';
     const showStart = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'start' });
+      refreshBell();
       api.setTitle('New tab');
       content.classList.remove('browser-content', 'terminal-content');
       content.innerHTML = `<div class="start-view">
@@ -92,6 +100,7 @@ class DemoPane {
     };
     const showFiles = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'files' });
+      refreshBell();
       api.setTitle('Files');
       content.replaceChildren();
       mountFiles(api.id, content, showStart, params.filesRoot || params.profileRoot || currentSpacePath(), params.profilePins || [], {
@@ -101,13 +110,15 @@ class DemoPane {
     };
     const showBrowser = (address = '') => {
       api.updateParameters({ ...api.getParameters(), tool: 'browser', address });
+      refreshBell();
       api.setTitle('Browser');
       content.classList.add('browser-content');
       content.replaceChildren();
-      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state));
+      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state), switchingSpace);
     };
     const showTerminal = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'terminal' });
+      refreshBell();
       api.setTitle(api.getParameters().terminalName || 'Terminal');
       content.classList.add('terminal-content');
       content.replaceChildren();
@@ -115,7 +126,8 @@ class DemoPane {
       pendingProfileCommands.delete(api.id);
       mountTerminal(api.id, content, api.getParameters().terminalCwd || params.agentSession?.cwd || params.profileCwd || currentSpacePath(), (title) => {
         if (!api.getParameters().terminalName) api.setTitle(title || 'Terminal');
-      }, (path, cwd) => void handleTerminalFileLink(path, cwd, api.id), { shell: params.profileShell, env: params.profileEnv, command: startupCommand, savedCwd: !!(api.getParameters().terminalCwd || params.agentSession?.cwd), fallbackCwd: params.profileCwd || currentSpacePath(), onCwdChange: cwd => saveTerminalCwd(api.id, cwd) });
+      }, (path, cwd) => void handleTerminalFileLink(path, cwd, api.id), { shell: params.profileShell, env: params.profileEnv, command: startupCommand, savedCwd: !!(api.getParameters().terminalCwd || params.agentSession?.cwd), fallbackCwd: params.profileCwd || currentSpacePath(), onCwdChange: cwd => saveTerminalCwd(api.id, cwd), onAttention: kind => receiveAttention(api.id, kind) });
+      content.addEventListener('pointerdown', () => clearAttention(api.id));
     };
     if (hasTerminal(api.id) || params.tool === 'terminal') showTerminal(); else if (hasBrowser(api.id) || params.tool === 'browser') showBrowser(params.address || ''); else if (hasFiles(api.id) || params.tool === 'files') showFiles(); else showStart();
     this.element.append(toolbar, content);
@@ -225,6 +237,11 @@ class WorkspaceTab extends DefaultTab {
     this.groupBadge = document.createElement('span');
     this.groupBadge.className = 'tab-group-badge';
     this.element.prepend(this.groupBadge, this.favicon);
+    this.attentionBadge = document.createElement('span'); this.attentionBadge.className = 'tab-attention'; this.attentionBadge.hidden = true; this.attentionBadge.setAttribute('aria-label', 'Terminal needs attention'); this.element.prepend(this.attentionBadge);
+    this.clearAttention = () => clearAttention(this.api.id);
+    this.element.addEventListener('click', this.clearAttention);
+    this.updateAttention = () => { this.attentionBadge.hidden = !attentionPanes.has(this.api.id); };
+    window.addEventListener('terminal-attention-change', this.updateAttention); this.updateAttention();
     this.openGroupMenu = (event) => showTabGroupMenu(event, this.api);
     this.element.addEventListener('contextmenu', this.openGroupMenu);
     this.refresh = () => {
@@ -257,6 +274,8 @@ class WorkspaceTab extends DefaultTab {
     this.action.removeEventListener('click', this.confirmClose, true);
     this.element.removeEventListener('dblclick', this.rename);
     this.element.removeEventListener('contextmenu', this.openGroupMenu);
+    this.element.removeEventListener('click', this.clearAttention);
+    window.removeEventListener('terminal-attention-change', this.updateAttention);
     this.paramSubscription?.dispose();
     super.dispose();
   }
@@ -369,6 +388,16 @@ function saveActiveSpace() {
   if (space) { space.layout = dock.toJSON(); persistSpaces(); }
 }
 function panelIds(layout) { return Object.keys(layout?.panels || {}); }
+function notifyAttentionChange() { window.dispatchEvent(new Event('terminal-attention-change')); renderSpaces(); }
+function clearAttention(id) { if (attentionPanes.delete(id)) notifyAttentionChange(); }
+function receiveAttention(id, kind) {
+  const panel = dock.getPanel(id);
+  const space = panel ? spaces.find(item => item.id === activeSpaceId) : spaces.find(item => item.layout?.panels?.[id]);
+  const params = panel ? panel.api.getParameters() : space?.layout?.panels?.[id]?.params;
+  if (!space || params?.tool !== 'terminal' || !params.attentionEnabled) return;
+  attentionPanes.set(id, { spaceId: space.id, kind });
+  notifyAttentionChange();
+}
 function savePaneState(paneId, tool, state) {
   const panel = dock.getPanel(paneId);
   if (panel?.api.getParameters().tool === tool) {
@@ -414,6 +443,8 @@ function renderSpaces() {
     const labels = document.createElement('span'); labels.className = 'space-label'; const name = document.createElement('span'); name.className = 'space-name'; name.textContent = space.name; labels.append(name);
     if (showSpacePaths) { const path = document.createElement('span'); path.className = 'space-path'; path.textContent = displaySpacePath(space.path) || 'Home folder'; labels.append(path); }
     select.append(folder, labels); select.title = `${space.name} — ${displaySpacePath(space.path) || 'Home folder'}`;
+    const attentionCount = [...attentionPanes.values()].filter(item => item.spaceId === space.id).length;
+    if (attentionCount) { const badge = document.createElement('span'); badge.className = 'space-attention'; badge.textContent = attentionCount; badge.setAttribute('aria-label', `${attentionCount} terminal${attentionCount === 1 ? '' : 's'} need attention`); select.append(badge); }
     if (space.id === activeSpaceId) select.setAttribute('aria-current', 'true');
     select.onclick = () => switchSpace(space.id);
     row.oncontextmenu = event => { event.preventDefault(); showSpaceContextMenu(space, event.clientX, event.clientY, select); };
@@ -435,6 +466,7 @@ function switchSpace(id) {
   catch (error) { console.error('Unable to restore space', error); dock.clear(); add(); }
   finally { switchingSpace = false; }
   for (const panelId of panelIds(space.layout)) retainedPanels.delete(panelId);
+  if (dock.activePanel) clearAttention(dock.activePanel.id);
   saveActiveSpace(); renderSpaces();
 }
 function initializeSpaces() {
@@ -548,7 +580,7 @@ document.getElementById('space-delete-confirm-button').onclick = () => {
   const space = editingSpace; if (!space || spaces.length <= 1) return;
   if (space.id === activeSpaceId) switchSpace(spaces.find(item => item.id !== space.id).id);
   spaces = spaces.filter(item => item.id !== space.id);
-  for (const id of panelIds(space.layout)) { retainedPanels.delete(id); closeTerminal(id); closeBrowser(id); closeFiles(id); }
+  for (const id of panelIds(space.layout)) { retainedPanels.delete(id); attentionPanes.delete(id); closeTerminal(id); closeBrowser(id); closeFiles(id); }
   persistSpaces(); closeSpaceDialog(); renderSpaces();
 };
 document.getElementById('space-browse').onclick = async () => {
@@ -564,7 +596,7 @@ document.getElementById('space-browse').onclick = async () => {
 };
 dock.onDidRemovePanel((panel) => {
   // Dockview also emits removal while moving a tab; allow it to reattach first.
-  setTimeout(() => { if (!dock.getPanel(panel.id) && !retainedPanels.has(panel.id)) { closeTerminal(panel.id); closeBrowser(panel.id); closeFiles(panel.id); } }, 0);
+  setTimeout(() => { if (!dock.getPanel(panel.id) && !retainedPanels.has(panel.id)) { clearAttention(panel.id); closeTerminal(panel.id); closeBrowser(panel.id); closeFiles(panel.id); } }, 0);
 });
 function reset() {
   dock.clear(); count = 0;

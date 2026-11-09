@@ -713,6 +713,7 @@ name = "cubicle"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "gtk",
  "portable-pty",
  "rfd",
  "serde",

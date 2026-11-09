@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { findFileLinks } from './terminal-links.js';
 import { captureTerminalDirectory } from './terminal-directory-capture.js';
+import { listenForTerminalAttention } from './terminal-attention.js';
 import '@xterm/xterm/css/xterm.css';
 
 const sessions = new Map();
@@ -29,6 +30,8 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
     };
     session.updateCwd = updateCwd;
     terminal.parser.registerOscHandler(7, value => { try { const url = new URL(value); if (url.protocol === 'file:') updateCwd(decodeURIComponent(url.pathname).replace(/^\/([a-z]:)/i, '$1')); } catch {} return false; });
+    session.disposeAttention = listenForTerminalAttention(terminal, kind => session.onAttention?.(kind));
+    session.onAttention = options.onAttention;
     terminal.registerLinkProvider({ provideLinks(lineNumber, callback) {
       const line = terminal.buffer.active.getLine(lineNumber - 1); if (!line) { callback([]); return; }
       const text = line.translateToString(true); const links = [];
@@ -120,6 +123,7 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
     session.onTitleChange = onTitleChange;
     session.onFileLink = onFileLink;
     session.onCwdChange = options.onCwdChange;
+    session.onAttention = options.onAttention;
     session.onTitleChange(session.title);
     container.append(session.element);
     requestAnimationFrame(() => session.resize());
@@ -143,6 +147,7 @@ export function closeTerminal(id) {
   sessions.delete(id);
   session.closed = true;
   session.observer.disconnect();
+  session.disposeAttention();
   clearTimeout(session.resizeTimer);
   session.terminal.dispose();
   // A close during startup waits for the spawn command to finish first.
