@@ -348,8 +348,15 @@ fn install_session_hook(path: &std::path::Path, script: &std::path::Path, provid
     Ok(())
 }
 
+#[cfg_attr(any(target_os = "linux", target_os = "macos"), tauri_runtime_cef::cef_entry_point)]
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder.runtime(tauri_runtime_wry::Wry::default());
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let builder = builder.runtime(tauri_runtime_cef::Cef::default());
+
+    builder
         .register_uri_scheme_protocol("browsermeta", |ctx, request| {
             if request.method() == tauri::http::Method::POST && request.body().len() < 8192 {
                 if let Some(id) = ctx.webview_label().strip_prefix("browser-") {

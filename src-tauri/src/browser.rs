@@ -1,9 +1,6 @@
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewBuilder, WebviewUrl};
-#[cfg(not(target_os = "linux"))]
 use tauri::{Position, Rect, Size};
 use serde::Serialize;
-#[cfg(target_os = "linux")]
-use gtk::prelude::*;
 
 #[derive(Clone, Serialize)]
 pub(crate) struct BrowserEvent { pub id: String, pub kind: &'static str, pub value: String }
@@ -19,6 +16,7 @@ pub async fn browser_create(app: AppHandle, id: String, url: String) -> Result<(
     let nav_app = app.clone(); let nav_id = id.clone();
     let title_app = app.clone(); let title_id = id.clone();
     let builder = WebviewBuilder::new(label(&id), WebviewUrl::External(parsed))
+        .bounds(Rect { position: Position::Physical(PhysicalPosition::new(0, 0)), size: Size::Physical(PhysicalSize::new(1, 1)) })
         .use_https_scheme(true)
         .initialization_script(r#"(() => {
           let last = '';
@@ -32,50 +30,27 @@ pub async fn browser_create(app: AppHandle, id: String, url: String) -> Result<(
           document.addEventListener('DOMContentLoaded', report);
           new MutationObserver(report).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['href', 'rel'] });
         })();"#)
-        .on_page_load(move |_, p| { if matches!(p.event(), tauri::webview::PageLoadEvent::Started) { let _ = nav_app.emit("browser-event", BrowserEvent { id: nav_id.clone(), kind: "url", value: p.url().to_string() }); } })
-        .on_document_title_changed(move |_, title| { let _ = title_app.emit("browser-event", BrowserEvent { id: title_id.clone(), kind: "title", value: title }); });
-    let window = app.get_window("main").ok_or("Main window not found")?;
-    let view = window.add_child(builder, PhysicalPosition::new(0, 0), PhysicalSize::new(1u32, 1u32)).map_err(|e| e.to_string())?;
-    view.hide().map_err(|e| e.to_string())?;
-    // On Linux Tauri puts child webviews into a GtkBox, which ignores their
-    // requested bounds. Use an overlay so each browser can occupy its pane.
-    #[cfg(target_os = "linux")]
-    view.with_webview(|platform| {
-        let child = platform.inner();
-        let Some(parent) = child.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) else { return };
-        parent.remove(&child);
-        let overlay = parent.children().into_iter().find_map(|widget| {
-            let overlay = widget.downcast::<gtk::Overlay>().ok()?;
-            (overlay.widget_name() == "cubicle-browser-overlay").then_some(overlay)
-        }).unwrap_or_else(|| {
-            let main = parent.children().into_iter().next().expect("main webview missing");
-            parent.remove(&main);
-            let overlay = gtk::Overlay::new();
-            overlay.set_widget_name("cubicle-browser-overlay");
-            overlay.add(&main);
-            parent.pack_start(&overlay, true, true, 0);
-            overlay.show_all();
-            overlay
+        .on_page_load(move |_, p| {
+            if matches!(p.event(), tauri::webview::PageLoadEvent::Started) {
+                let app = nav_app.clone();
+                let event = BrowserEvent { id: nav_id.clone(), kind: "url", value: p.url().to_string() };
+                tauri::async_runtime::spawn(async move { let _ = app.emit("browser-event", event); });
+            }
+        })
+        .on_document_title_changed(move |_, title| {
+            let app = title_app.clone();
+            let event = BrowserEvent { id: title_id.clone(), kind: "title", value: title };
+            tauri::async_runtime::spawn(async move { let _ = app.emit("browser-event", event); });
         });
-        child.set_halign(gtk::Align::Start);
-        child.set_valign(gtk::Align::Start);
-        overlay.add_overlay(&child);
-    }).map_err(|e| e.to_string())?;
+    let window = app.get_window("main").ok_or("Main window not found")?;
+    let view = window.add_child(builder).map_err(|e| e.to_string())?;
+    view.hide().map_err(|e| e.to_string())?;
     Ok(())
 }
 #[tauri::command]
 pub fn browser_position(app: AppHandle, id: String, x: i32, y: i32, w: u32, h: u32, visible: bool) -> Result<(), String> {
     if let Some(view) = app.get_webview(&label(&id)) {
         if visible && w > 1 && h > 1 {
-            #[cfg(target_os = "linux")]
-            view.with_webview(move |platform| {
-                let child = platform.inner();
-                let scale = child.scale_factor().max(1);
-                child.set_margin_start(x.max(0) / scale);
-                child.set_margin_top(y.max(0) / scale);
-                child.set_size_request((w as i32) / scale, (h as i32) / scale);
-            }).map_err(|e| e.to_string())?;
-            #[cfg(not(target_os = "linux"))]
             view.set_bounds(Rect { position: Position::Physical(PhysicalPosition::new(x, y)), size: Size::Physical(PhysicalSize::new(w, h)) }).map_err(|e| e.to_string())?;
             view.show().map_err(|e| e.to_string())?;
         } else { view.hide().map_err(|e| e.to_string())?; }
