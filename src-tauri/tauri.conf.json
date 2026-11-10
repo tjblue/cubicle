@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{ "title": "Cubicle", "width": 1280, "height": 800, "minWidth": 640, "minHeight": 480, "dragDropEnabled": false }],
-    "security": { "csp": "default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:4179" }
+    "security": { "csp": "default-src 'self'; img-src 'self' https: http: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:4179" }
   },
   "bundle": { "active": false }
 }

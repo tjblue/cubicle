@@ -361,7 +361,7 @@ fn main() {
             tauri::http::Response::builder().status(204).header("Access-Control-Allow-Origin", "*").body(Vec::new()).unwrap()
         })
         .manage(Terminals::default())
-        .invoke_handler(tauri::generate_handler![terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, list_files, preview_file, save_markdown, resolve_file_link, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
         .build(tauri::generate_context!())
         .expect("failed to build Cubicle")
         .run(|app, event| {
@@ -493,6 +493,26 @@ fn preview_file(path: String) -> Result<String, String> {
 }
 
 
+#[derive(serde::Serialize)]
+struct ImagePreview { data: Vec<u8>, mime: &'static str }
+
+#[tauri::command]
+fn preview_image(path: String) -> Result<ImagePreview, String> {
+    const LIMIT: u64 = 10 * 1024 * 1024;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() { return Err("This is not a regular file".into()); }
+    let mut data = Vec::new();
+    file.take(LIMIT + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
+    if data.len() as u64 > LIMIT { return Err("Image is too large to preview (10 MB limit)".into()); }
+    let mime = if data.starts_with(b"\x89PNG\r\n\x1a\n") { "image/png" }
+        else if data.starts_with(b"\xff\xd8\xff") { "image/jpeg" }
+        else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") { "image/gif" }
+        else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" { "image/webp" }
+        else { return Err("Unsupported image format".into()); };
+    Ok(ImagePreview { data, mime })
+}
+
+
 
 #[tauri::command]
 fn save_markdown(path: String, original: String, content: String) -> Result<(), String> {
@@ -516,6 +536,21 @@ fn resolve_file_link(path: String, cwd: Option<String>) -> Result<String, String
 #[cfg(test)]
 mod file_workflow_tests {
     use super::*;
+    #[test]
+    fn image_preview_checks_signatures_and_size() {
+        let folder = std::env::temp_dir().join(format!("cubicle-image-test-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("image.png");
+        std::fs::write(&file, b"\x89PNG\r\n\x1a\nvalid").unwrap();
+        assert_eq!(preview_image(file.to_string_lossy().into_owned()).unwrap().mime, "image/png");
+        std::fs::write(&file, b"<svg onload=alert(1)>").unwrap();
+        assert!(preview_image(file.to_string_lossy().into_owned()).is_err());
+        std::fs::write(&file, vec![0u8; 10 * 1024 * 1024 + 1]).unwrap();
+        assert!(preview_image(file.to_string_lossy().into_owned()).is_err());
+        assert!(preview_image(folder.to_string_lossy().into_owned()).is_err());
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(folder).unwrap();
+    }
     #[test]
     fn resolves_relative_links_and_rejects_stale_saves() {
         let folder = std::env::temp_dir().join(format!("cubicle-file-test-{}", std::process::id()));

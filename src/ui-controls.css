@@ -1,0 +1,11 @@
+.chrome-integrated .pane-toolbar:has(.terminal-attention-toggle:not([hidden])) { display: none; }
+.tab-bell { display: none; }
+.chrome-integrated .tab-bell:not([hidden]) { display: inline-flex; }
+.tab-group-menu .tab-group-colors { display: flex; gap: 5px; padding: 7px 9px; }
+.tab-group-menu .tab-group-swatch { width: 22px; height: 22px; padding: 0; border: 2px solid transparent; border-radius: 50%; background: var(--swatch-color); }
+.tab-group-menu .tab-group-swatch[aria-pressed="true"] { border-color: white; }
+.tab-group-menu .tab-group-swatch:hover, .tab-group-menu .tab-group-swatch:focus-visible { background: var(--swatch-color); outline: 2px solid white; }
+#space-notification-panel button small { display: block; margin-top: 3px; color: #aebbc8; }
+.terminal-surface { position: relative; }
+.terminal-restart { position: absolute; z-index: 2; right: 12px; bottom: 12px; padding: 7px 10px; color: #e6edf8; background: #36465e; border: 1px solid #7184a2; border-radius: 5px; cursor: pointer; }
+.terminal-restart[hidden] { display: none; }

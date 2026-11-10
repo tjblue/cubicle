@@ -1,11 +1,14 @@
+import { readWorkspace, writeWorkspace, confirmQuitChanges } from './workspace-safety.js';
+import { chooseAction } from './confirm-dialog.js';
 import { parseProfile } from './profiles.js';
 import { createDockview, themeDark, DefaultTab } from 'dockview';
 import 'dockview/dist/styles/dockview.css';
 import './style.css';
-import { mountFiles, hasFiles, closeFiles, setFilesRoot, openFileInPane, filePaneDirty, saveFilePane } from './files.js';
+import './ui-controls.css';
+import { mountFiles, hasFiles, closeFiles, setFilesRoot, openFileInPane, filePaneDirty, saveFilePane, dirtyFilePaneIds, confirmFilePaneNavigation } from './files.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { browserControls, closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
+import { closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
 import { captureTerminalDirectories, closeTerminal, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
 
 const icons = {
@@ -62,6 +65,7 @@ class DemoPane {
     const refreshBell = () => { const enabled = !!api.getParameters().attentionEnabled; bell.hidden = api.getParameters().tool !== 'terminal'; bell.classList.toggle('enabled', enabled); bell.setAttribute('aria-pressed', String(enabled)); bell.setAttribute('aria-label', enabled ? 'Disable terminal attention alerts' : 'Enable terminal attention alerts'); bell.title = enabled ? 'Terminal attention alerts on' : 'Terminal attention alerts off'; };
     bell.onclick = () => { api.updateParameters({ ...api.getParameters(), attentionEnabled: !api.getParameters().attentionEnabled }); refreshBell(); if (!api.getParameters().attentionEnabled) clearAttention(api.id); window.dispatchEvent(new Event('space-content-change')); };
     toolbar.append(bell);
+    this.bellSubscription = api.onDidParametersChange(refreshBell);
     const content = document.createElement('div');
     content.className = 'pane-content';
     const showStart = () => {
@@ -70,23 +74,19 @@ class DemoPane {
       api.setTitle('New tab');
       content.classList.remove('browser-content', 'terminal-content');
       content.innerHTML = `<div class="start-view">
-        ${browserControls(true)}
+
         <div class="start-inner">
           <div class="start-heading"><h2>Tools</h2><p>Choose what to open in this tab.</p></div>
           <div class="tool-grid">
             <button class="tool-choice" data-tool="files" type="button"><span class="tool-icon">${icon('files')}</span><span class="tool-copy"><strong>Files</strong><small>Explore and preview files</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
             <button class="tool-choice" data-tool="terminal" type="button"><span class="tool-icon">${icon('terminal')}</span><span class="tool-copy"><strong>Terminal</strong><small>Work in a command line</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
+            <button class="tool-choice" data-tool="browser" type="button"><span class="tool-icon">${icon('browser')}</span><span class="tool-copy"><strong>Browser</strong><small>Browse the web</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
           </div>
 
         </div>
       </div>`;
       content.querySelectorAll('[data-tool]').forEach((button) => {
         button.addEventListener('click', () => button.dataset.tool === 'terminal' ? showTerminal() : button.dataset.tool === 'files' ? showFiles() : showBrowser());
-      });
-      content.querySelector('form').addEventListener('submit', (event) => {
-        event.preventDefault();
-        const value = content.querySelector('input').value.trim();
-        if (value) showBrowser(value);
       });
     };
     const showPlaceholder = (tool, address = '') => {
@@ -106,6 +106,7 @@ class DemoPane {
       mountFiles(api.id, content, showStart, params.filesRoot || params.profileRoot || currentSpacePath(), params.profilePins || [], {
         preview: params.filesPreview || params.openFile,
         onStateChange: state => savePaneState(api.id, 'files', { filesRoot: state.root, filesPreview: state.preview, openFile: undefined }),
+        onOpenUrl: url => openBrowserLink(url, api.id),
       });
     };
     const showBrowser = (address = '') => {
@@ -133,6 +134,7 @@ class DemoPane {
     this.element.append(toolbar, content);
   }
   onShow() { refreshTerminal(this.id); refreshBrowser(this.id); }
+  dispose() { this.bellSubscription?.dispose(); }
 }
 
 const terminalCloseSetting = 'cubicle-confirm-terminal-close';
@@ -196,10 +198,13 @@ function showTabGroupMenu(event, api) {
       if (!name?.trim()) return;
       for (const item of dock.panels) if (item.api.getParameters().tabGroup?.id === current.id) setTabGroup(item, { ...current, name: name.trim() });
     });
-    addItem('Change group color', () => {
-      const color = tabGroupColors[(tabGroupColors.indexOf(current.color) + 1) % tabGroupColors.length];
-      for (const item of dock.panels) if (item.api.getParameters().tabGroup?.id === current.id) setTabGroup(item, { ...current, color });
-    });
+    const colors = document.createElement('div'); colors.className = 'tab-group-colors'; colors.setAttribute('role', 'group'); colors.setAttribute('aria-label', 'Group color');
+    for (const [index, color] of tabGroupColors.entries()) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'tab-group-swatch'; button.style.setProperty('--swatch-color', color);
+      button.setAttribute('aria-label', `Group color ${index + 1}${color === current.color ? ', selected' : ''}`); button.setAttribute('aria-pressed', String(color === current.color));
+      button.addEventListener('click', () => { for (const item of dock.panels) if (item.api.getParameters().tabGroup?.id === current.id) setTabGroup(item, { ...current, color }); closeTabGroupMenu(); }); colors.append(button);
+    }
+    menu.append(colors);
     addItem('Remove tab from group', () => setTabGroup(panel, null));
     addItem('Ungroup all tabs', () => {
       for (const item of dock.panels) if (item.api.getParameters().tabGroup?.id === current.id) setTabGroup(item, null);
@@ -219,7 +224,13 @@ class WorkspaceTab extends DefaultTab {
     super.init(params);
     this.api = params.api;
     this.confirmClose = (event) => {
-      if (filePaneDirty(this.api.id) && !window.confirm('Discard unsaved Markdown changes?')) { event.preventDefault(); event.stopPropagation(); return; }
+      if (filePaneDirty(this.api.id)) {
+        event.preventDefault(); event.stopPropagation();
+        void confirmFilePaneNavigation(this.api.id).then(allowed => {
+          if (allowed && dock.getPanel(this.api.id)?.api === this.api) this.api.close();
+        });
+        return;
+      }
       if (this.api.getParameters().tool !== 'terminal' || !confirmTerminalClose) return;
       event.preventDefault();
       event.stopPropagation();
@@ -237,6 +248,11 @@ class WorkspaceTab extends DefaultTab {
     this.groupBadge = document.createElement('span');
     this.groupBadge.className = 'tab-group-badge';
     this.element.prepend(this.groupBadge, this.favicon);
+    this.bell = document.createElement('button'); this.bell.type = 'button'; this.bell.className = 'pane-action terminal-attention-toggle tab-bell';
+    this.bell.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-2.5 7-2.5 8.5h17C20.5 15 18 15 18 8ZM10 20h4"/></svg>';
+    this.bell.addEventListener('pointerdown', event => event.stopPropagation());
+    this.bell.addEventListener('click', event => { event.stopPropagation(); const enabled = !this.api.getParameters().attentionEnabled; this.api.updateParameters({ ...this.api.getParameters(), attentionEnabled: enabled }); if (!enabled) clearAttention(this.api.id); window.dispatchEvent(new Event('space-content-change')); });
+    this.element.append(this.bell);
     this.attentionBadge = document.createElement('span'); this.attentionBadge.className = 'tab-attention'; this.attentionBadge.hidden = true; this.attentionBadge.setAttribute('aria-label', 'Terminal needs attention'); this.element.prepend(this.attentionBadge);
     this.clearAttention = () => clearAttention(this.api.id);
     this.element.addEventListener('click', this.clearAttention);
@@ -247,6 +263,7 @@ class WorkspaceTab extends DefaultTab {
     this.refresh = () => {
       const data = this.api.getParameters();
       const group = data.tabGroup;
+      this.bell.hidden = data.tool !== 'terminal'; this.bell.classList.toggle('enabled', !!data.attentionEnabled); this.bell.setAttribute('aria-pressed', String(!!data.attentionEnabled)); this.bell.setAttribute('aria-label', data.attentionEnabled ? 'Disable terminal attention alerts' : 'Enable terminal attention alerts'); this.bell.title = data.attentionEnabled ? 'Terminal attention alerts on' : 'Terminal attention alerts off';
       this.groupBadge.hidden = !group?.id;
       this.groupBadge.textContent = group?.name || '';
       this.groupBadge.style.setProperty('--tab-group-color', group?.color || '#89a8f8');
@@ -340,15 +357,41 @@ async function handleTerminalFileLink(raw, cwd, terminalId) {
   try {
     const resolved = await invoke('resolve_file_link', { path, cwd: cwd || currentSpacePath() });
     const panel = dock.panels.find(p => p.group.activePanel?.id === p.id && hasFiles(p.id));
-    if (panel) { openFileInPane(panel.id, resolved); panel.api.setActive(); return; }
+    if (panel) { panel.api.setActive(); await openFileInPane(panel.id, resolved); return; }
     const id = `pane-${crypto.randomUUID()}`; ++count;
     dock.addPanel({ id, component: 'demo', title: 'Files', params: { label: `Pane ${count}`, tool: 'files', openFile: resolved }, position: { referencePanel: terminalId, direction: 'within' } });
   } catch (error) { console.error('Cannot open file link:', error); window.alert(`Cannot open file: ${error}`); }
 }
-window.addEventListener('beforeunload', event => { if (dock.panels.some(panel => filePaneDirty(panel.id))) { event.preventDefault(); event.returnValue = ''; } });
+function openBrowserLink(url, sourceId) {
+  if (!/^https?:\/\//i.test(url)) return;
+  dock.addPanel({ id: `pane-${crypto.randomUUID()}`, component: 'demo', title: 'Browser',
+    params: { label: 'Browser', tool: 'browser', address: url },
+    ...(dock.getPanel(sourceId) ? { position: { referencePanel: sourceId, direction: 'within' } } : {}) });
+}
+async function confirmFilePanesNavigation(ids) {
+  for (const id of ids) if (!await confirmFilePaneNavigation(id)) return false;
+  return true;
+}
+window.addEventListener('beforeunload', event => { if (dirtyFilePaneIds().length || profileDirty) { event.preventDefault(); event.returnValue = ''; } });
 const retainedPanels = new Set();
 const spacesKey = 'cubicle-spaces-v1';
 let spaces = [], activeSpaceId = null, switchingSpace = false, saveTimer;
+let workspaceStorageLocked = false, workspaceSaveWarning = false;
+function protectWorkspaceStorage(error) {
+  console.error('Unable to restore workspace', error);
+  if (workspaceStorageLocked) return;
+  workspaceStorageLocked = true;
+  const banner = document.createElement('div');
+  banner.setAttribute('role', 'alert');
+  banner.style.cssText = 'position:fixed;z-index:10000;left:1rem;right:1rem;bottom:1rem;padding:1rem;background:#30242a;color:white;border:1px solid #d88;border-radius:8px';
+  const message = document.createElement('span');
+  message.textContent = 'The saved workspace could not be restored. It has been preserved, and workspace saving is paused. Download a backup before choosing to replace it.';
+  const backup = document.createElement('button'); backup.textContent = 'Download backup';
+  backup.onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([localStorage.getItem(spacesKey) || ''], { type: 'application/json' })); a.download = 'cubicle-workspace-backup.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
+  const replace = document.createElement('button'); replace.textContent = 'Replace saved workspace';
+  replace.onclick = () => { if (!confirm('Replace the preserved workspace with the current layout? Download a backup first if you may need it.')) return; workspaceStorageLocked = false; if (saveActiveSpace()) banner.remove(); else workspaceStorageLocked = true; };
+  banner.append(message, document.createTextNode(' '), backup, document.createTextNode(' '), replace); document.body.append(banner);
+}
 const spacesList = document.getElementById('spaces-list');
 const spaceSearch = document.getElementById('space-search');
 let spaceSort = localStorage.getItem('cubicle-space-sort') || 'recent';
@@ -379,23 +422,25 @@ function showSpaceContextMenu(space, x, y, opener) {
 function currentSpacePath() { return spaces.find(space => space.id === activeSpaceId)?.path || null; }
 function displaySpacePath(path) { return path?.startsWith('\\\\?\\UNC\\') ? '\\\\' + path.slice(8) : path?.startsWith('\\\\?\\') ? path.slice(4) : path; }
 function persistSpaces() {
-  try { localStorage.setItem(spacesKey, JSON.stringify({ spaces, activeSpaceId })); }
-  catch (error) { console.error('Unable to save spaces', error); }
+  if (workspaceStorageLocked) return false;
+  if (writeWorkspace(localStorage, spacesKey, { spaces, activeSpaceId })) { workspaceSaveWarning = false; return true; }
+  if (!workspaceSaveWarning) { workspaceSaveWarning = true; alert('Could not save the workspace. Changes may be lost when Cubicle closes. Check available storage and try again.'); } return false;
 }
 function saveActiveSpace() {
-  if (switchingSpace) return;
+  if (switchingSpace || workspaceStorageLocked) return false;
   const space = spaces.find(item => item.id === activeSpaceId);
-  if (space) { space.layout = dock.toJSON(); persistSpaces(); }
+  if (space) { space.layout = dock.toJSON(); return persistSpaces(); }
+  return false;
 }
 function panelIds(layout) { return Object.keys(layout?.panels || {}); }
-function notifyAttentionChange() { window.dispatchEvent(new Event('terminal-attention-change')); renderSpaces(); }
+function notifyAttentionChange() { document.getElementById('space-notification-dot').hidden = attentionPanes.size === 0; window.dispatchEvent(new Event('terminal-attention-change')); renderSpaces(); if (!notificationPanel.hidden) renderNotifications(); }
 function clearAttention(id) { if (attentionPanes.delete(id)) notifyAttentionChange(); }
 function receiveAttention(id, kind) {
   const panel = dock.getPanel(id);
   const space = panel ? spaces.find(item => item.id === activeSpaceId) : spaces.find(item => item.layout?.panels?.[id]);
   const params = panel ? panel.api.getParameters() : space?.layout?.panels?.[id]?.params;
   if (!space || params?.tool !== 'terminal' || !params.attentionEnabled) return;
-  attentionPanes.set(id, { spaceId: space.id, kind });
+  attentionPanes.set(id, { spaceId: space.id, kind, time: Date.now(), title: panel?.api.title || space.layout?.panels?.[id]?.title || params.terminalName || 'Terminal' });
   notifyAttentionChange();
 }
 function savePaneState(paneId, tool, state) {
@@ -463,7 +508,7 @@ function switchSpace(id) {
   space.lastOpened = Date.now();
   switchingSpace = true;
   try { if (space.layout) dock.fromJSON(space.layout); else { dock.clear(); add(); } }
-  catch (error) { console.error('Unable to restore space', error); dock.clear(); add(); }
+  catch (error) { protectWorkspaceStorage(error); dock.clear(); add(); }
   finally { switchingSpace = false; }
   for (const panelId of panelIds(space.layout)) retainedPanels.delete(panelId);
   if (dock.activePanel) clearAttention(dock.activePanel.id);
@@ -471,14 +516,14 @@ function switchSpace(id) {
 }
 function initializeSpaces() {
   try {
-    const saved = JSON.parse(localStorage.getItem(spacesKey) || 'null');
-    if (Array.isArray(saved?.spaces)) spaces = saved.spaces.filter(item => typeof item.id === 'string' && typeof item.name === 'string');
+    const saved = readWorkspace(localStorage, spacesKey);
+    if (saved) spaces = saved.spaces;
     activeSpaceId = spaces.some(item => item.id === saved?.activeSpaceId) ? saved.activeSpaceId : spaces[0]?.id;
-  } catch { /* Start with a default space. */ }
+  } catch (error) { protectWorkspaceStorage(error); }
   if (!spaces.length) { const space = { id: crypto.randomUUID(), name: 'My Space', layout: null }; spaces.push(space); activeSpaceId = space.id; }
   switchingSpace = true;
   try { const space = spaces.find(item => item.id === activeSpaceId); if (space.layout) dock.fromJSON(space.layout); else reset(); }
-  catch (error) { console.error('Unable to restore space', error); reset(); }
+  catch (error) { protectWorkspaceStorage(error); reset(); }
   finally { switchingSpace = false; }
   saveActiveSpace(); renderSpaces();
   dock.onDidLayoutChange(() => { if (!switchingSpace) { clearTimeout(saveTimer); saveTimer = setTimeout(saveActiveSpace, 200); } });
@@ -496,9 +541,21 @@ document.getElementById('spaces-menu-toggle').onclick = event => {
   spacesMenu.append(sidebarMenuButton(`${showSpacePaths ? '✓ ' : ''}Show folder paths`, () => { showSpacePaths = !showSpacePaths; localStorage.setItem('cubicle-space-show-paths', String(showSpacePaths)); closeSidebarPopups(); renderSpaces(); }), sidebarMenuButton('Search spaces', () => { closeSidebarPopups(); toggleSpaceSearch(true); }), sidebarMenuButton('New space', () => { closeSidebarPopups(); openSpaceDialog(null, document.getElementById('spaces-menu-toggle')); }));
   spacesMenu.hidden = false; event.currentTarget.setAttribute('aria-expanded', 'true');
 };
+function renderNotifications() {
+  notificationPanel.replaceChildren(); const title = document.createElement('strong'); title.textContent = 'Notifications'; notificationPanel.append(title);
+  const entries = [...attentionPanes.entries()].sort((a, b) => b[1].time - a[1].time);
+  if (!entries.length) { const message = document.createElement('p'); message.textContent = 'No notifications.'; notificationPanel.append(message); return; }
+  for (const [id, item] of entries) {
+    const space = spaces.find(value => value.id === item.spaceId); if (!space) continue;
+    const button = document.createElement('button'); button.type = 'button';
+    const label = document.createElement('span'); label.textContent = `${item.title} · ${space.name}`;
+    const detail = document.createElement('small'); detail.textContent = `${item.kind === 'bell' ? 'Terminal bell' : 'Terminal needs attention'} · ${new Date(item.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    button.append(label, detail); button.addEventListener('click', () => { closeSidebarPopups(); switchSpace(item.spaceId); const panel = dock.getPanel(id); if (panel) panel.api.setActive(); clearAttention(id); }); notificationPanel.append(button);
+  }
+}
 document.getElementById('space-notifications').onclick = event => {
   event.stopPropagation(); const opening = notificationPanel.hidden; closeSidebarPopups(); if (!opening) return;
-  notificationPanel.replaceChildren(); const title = document.createElement('strong'); title.textContent = 'Notifications'; const message = document.createElement('p'); message.textContent = 'No notifications.'; notificationPanel.append(title, message);
+  renderNotifications();
   notificationPanel.hidden = false; event.currentTarget.setAttribute('aria-expanded', 'true');
 };
 document.addEventListener('click', event => { if (!event.target.closest('.sidebar-popup') && !event.target.closest('#spaces-menu-toggle') && !event.target.closest('#space-notifications')) closeSidebarPopups(); });
@@ -576,12 +633,14 @@ spaceForm.addEventListener('submit', async event => {
 });
 document.getElementById('space-delete').onclick = () => { document.getElementById('space-delete-confirm').hidden = false; document.getElementById('space-delete-cancel').focus(); };
 document.getElementById('space-delete-cancel').onclick = () => { document.getElementById('space-delete-confirm').hidden = true; document.getElementById('space-delete').focus(); };
-document.getElementById('space-delete-confirm-button').onclick = () => {
+document.getElementById('space-delete-confirm-button').onclick = async () => {
   const space = editingSpace; if (!space || spaces.length <= 1) return;
+  const ids = space.id === activeSpaceId ? dock.panels.map(panel => panel.id) : panelIds(space.layout);
+  if (!await confirmFilePanesNavigation(ids) || editingSpace !== space || !spaceDialog.open) return;
   if (space.id === activeSpaceId) switchSpace(spaces.find(item => item.id !== space.id).id);
   spaces = spaces.filter(item => item.id !== space.id);
   for (const id of panelIds(space.layout)) { retainedPanels.delete(id); attentionPanes.delete(id); closeTerminal(id); closeBrowser(id); closeFiles(id); }
-  persistSpaces(); closeSpaceDialog(); renderSpaces();
+  persistSpaces(); closeSpaceDialog(); notifyAttentionChange();
 };
 document.getElementById('space-browse').onclick = async () => {
   const error = document.getElementById('space-path-error'); error.textContent = '';
@@ -602,10 +661,10 @@ function reset() {
   dock.clear(); count = 0;
   add(); add('right'); add('below');
 }
-document.getElementById('reset').onclick = () => {
-  const dirty = dock.panels.some(panel => filePaneDirty(panel.id));
+document.getElementById('reset').onclick = async () => {
+  if (!await confirmFilePanesNavigation(dock.panels.map(panel => panel.id))) return;
   const terminals = dock.panels.some(panel => panel.api.getParameters().tool === 'terminal');
-  const consequences = [dirty && 'discard unsaved Markdown changes', terminals && 'close terminal sessions and running commands'].filter(Boolean);
+  const consequences = [terminals && 'close terminal sessions and running commands'].filter(Boolean);
   if (consequences.length && !window.confirm(`Reset layout? This will ${consequences.join(' and ')}.`)) return;
   reset();
 };
@@ -685,9 +744,9 @@ document.getElementById('reset').addEventListener('click', closeMenus);
 document.getElementById('menu-new-space').addEventListener('click', () => { closeMenus(); openSpaceDialog(null, document.getElementById('space-add')); });
 document.getElementById('menu-edit-space').addEventListener('click', () => { const space = spaces.find(item => item.id === activeSpaceId); closeMenus(); if (space) openSpaceDialog(space, document.getElementById('space-add')); });
 document.getElementById('menu-save-file').addEventListener('click', () => { const panel = dock.activePanel; closeMenus(); if (panel) void saveFilePane(panel.id); });
-document.getElementById('menu-close-tab').addEventListener('click', () => {
+document.getElementById('menu-close-tab').addEventListener('click', async () => {
   const panel = dock.activePanel; closeMenus(); if (!panel) return;
-  if (filePaneDirty(panel.id) && !window.confirm('Discard unsaved Markdown changes?')) return;
+  if (!await confirmFilePaneNavigation(panel.id) || dock.getPanel(panel.id) !== panel) return;
   if (panel.api.getParameters().tool === 'terminal' && confirmTerminalClose) {
     if (terminalCloseDialog.open) return;
     pendingTerminalClose = panel.api; terminalCloseDialog.returnValue = 'cancel'; terminalCloseDialog.showModal();
@@ -827,7 +886,15 @@ function renderProfilePreview() {
 function renderProfiles() { profileSelect.replaceChildren(); profiles.forEach((p, i) => { const o = document.createElement('option'); o.value = i; o.textContent = p.name; profileSelect.append(o); }); profileSelect.value = profileIndex; profileJson.value = JSON.stringify(profiles[profileIndex], null, 2); profileDirty = false; profileStatus.textContent = ''; renderProfilePreview(); }
 profileSelect.onchange = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) { profileSelect.value = profileIndex; return; } profileIndex = Number(profileSelect.value); renderProfiles(); };
 profileJson.oninput = () => { profileDirty = true; profileStatus.textContent = 'Unsaved changes'; renderProfilePreview(); };
-document.getElementById('profile-save').onclick = () => { try { profiles[profileIndex] = parseProfile(profileJson.value).source; if (persistProfiles()) { renderProfiles(); profileStatus.textContent = 'Profile saved.'; } } catch (e) { profileStatus.textContent = `Cannot save: ${e.message}`; } };
+function saveProfileEdits() {
+  try {
+    const previous = profiles[profileIndex];
+    profiles[profileIndex] = parseProfile(profileJson.value).source;
+    if (!persistProfiles()) { profiles[profileIndex] = previous; return false; }
+    renderProfiles(); profileStatus.textContent = 'Profile saved.'; return true;
+  } catch (e) { profileStatus.textContent = `Cannot save: ${e.message}`; return false; }
+}
+document.getElementById('profile-save').onclick = saveProfileEdits;
 document.getElementById('profile-new').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; profiles.push({ name: 'New profile', panes: ['terminal'] }); profileIndex = profiles.length - 1; persistProfiles(); renderProfiles(); };
 document.getElementById('profile-duplicate').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; const copy = structuredClone(profiles[profileIndex]); copy.name += ' copy'; profiles.push(copy); profileIndex = profiles.length - 1; persistProfiles(); renderProfiles(); };
 document.getElementById('profile-delete').onclick = () => { if (!confirm('Delete this profile? Existing spaces are not affected.')) return; profiles.splice(profileIndex, 1); if (!profiles.length) profiles.push({ name: 'New profile', panes: ['terminal'] }); profileIndex = 0; persistProfiles(); renderProfiles(); };
@@ -839,7 +906,7 @@ async function launchProfile() {
   const profile = parseProfile(profiles[profileIndex]), target = document.getElementById('profile-target').value;
   const commands = profile.groups.flatMap(g => g.tabs.filter(t => t.type === 'terminal' && t.command).map(t => t.command));
   if (target === 'replace' && !confirm('Replace the current space layout? This closes its panes and ends terminal sessions.')) return;
-  if (target === 'replace' && dock.panels.some(p => filePaneDirty(p.id)) && !confirm('The current space has unsaved Markdown edits. Discard them?')) return;
+  if (target === 'replace' && !await confirmFilePanesNavigation(dock.panels.map(panel => panel.id))) return;
   if (commands.length && !confirm(`This profile will run these terminal commands:\n\n${commands.join('\n')}\n\nContinue?`)) return;
   let root = target === 'new' ? profile.root : currentSpacePath();
   if (target === 'new' && root && isTauri()) { try { root = await invoke('validate_directory', { path: root }); } catch (e) { profileStatus.textContent = `Cannot use project folder: ${e}`; return; } }
@@ -869,11 +936,20 @@ if (isTauri()) {
   appWindow.onCloseRequested(async event => {
     event.preventDefault();
     if (closing) return;
-    if (dock.panels.some(panel => filePaneDirty(panel.id)) && !confirm('You have unsaved Markdown changes. Close Cubicle and discard them?')) return;
     closing = true;
     try {
+      const result = await confirmQuitChanges({
+        dirtyFilePaneIds, isProfileDirty: () => profileDirty, saveFilePane, saveProfile: saveProfileEdits,
+        choose: (count, dirtyProfile) => chooseAction({ title: 'Unsaved changes', message: 'You have unsaved changes in ' + [count && `${count} file${count === 1 ? '' : 's'}`, dirtyProfile && 'the launch profile'].filter(Boolean).join(' and ') + '. Save them before closing?', choices: [{ value: 'save', label: 'Save all' }, { value: 'discard', label: 'Discard', danger: true }, { value: 'cancel', label: 'Cancel' }] })
+      });
+      if (result !== 'proceed') {
+        if (result === 'profile-failed') openSettings('settings-profiles');
+        if (result === 'file-failed') alert('A Markdown file could not be saved. Cubicle is still open so you can review the error.');
+        if (result === 'still-dirty') alert('Some edits are still unsaved. Review them before closing.');
+        closing = false; return;
+      }
       await captureTerminalDirectories();
-      saveActiveSpace();
+      if (!workspaceStorageLocked && !saveActiveSpace()) { closing = false; return; }
       await appWindow.destroy();
     } catch (error) {
       closing = false;

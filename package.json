@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --experimental-vm-modules --test tests/*.test.js",
     "dev": "vite --host 127.0.0.1 --port 4179 --strictPort",
     "build": "vite build",
     "desktop:dev": "tauri dev",

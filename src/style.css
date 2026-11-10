@@ -100,6 +100,13 @@ button:hover { background: #475065; }
 .files-document.markdown code { background: #293344; border-radius: 3px; padding: 2px 4px; }
 .files-document.markdown pre { background: #202735; border-radius: 6px; padding: 12px; }
 .files-document.markdown pre code { padding: 0; }
+.files-document.markdown a { color: #a8c5ff; text-decoration: underline; text-underline-offset: 3px; }
+.files-document.markdown img { max-width: 100%; height: auto; }
+.files-document.markdown table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+.files-document.markdown th, .files-document.markdown td { border: 1px solid #465166; padding: 7px 10px; text-align: left; }
+.files-document.markdown th { background: #252e3d; }
+.files-document.markdown blockquote { margin-left: 0; padding-left: 16px; border-left: 3px solid #63799f; color: #aebed3; }
+.files-document.markdown .ProseMirror[contenteditable="false"] { min-height: 0; }
 .files-outline { position: absolute; right: 12px; top: 48px; z-index: 2; width: 180px; max-height: 55%; overflow: auto; background: #202a39; border: 1px solid #43516a; border-radius: 8px; padding: 8px; box-shadow: 0 8px 24px #0006; }
 .files-outline[hidden] { display: none; }
 .files-outline strong { display: block; padding: 3px 7px 6px; color: #91a0b8; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
@@ -479,3 +486,11 @@ header.app-menubar { flex: none; justify-content: flex-start; gap: 0; height: 37
 .sidebar-popup p { margin: 4px 8px 8px; color: #aebbc8; }
 .sidebar-menu-label { padding: 6px 8px; color: #94a3b3; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .space-context-menu { position: fixed; right: auto; width: 170px; }
+
+.app-confirm-dialog { width: min(440px, calc(100vw - 32px)); padding: 24px; border: 1px solid #526076; border-radius: 10px; background: #202733; color: #e7eaf0; box-shadow: 0 18px 70px #0009; }
+.app-confirm-dialog::backdrop { background: #080c14a6; }
+.app-confirm-dialog h2 { margin: 0 0 10px; font-size: 18px; }
+.app-confirm-dialog p { margin: 0 0 22px; color: #b6c3d6; line-height: 1.6; white-space: pre-line; }
+.app-confirm-dialog > button { margin: 4px 8px 0 0; padding: 8px 14px; }
+.app-confirm-dialog > button.danger { color: #ffc2bd; border-color: #87555b; background: #452c35; }
+.app-confirm-dialog > button:focus-visible { outline: 2px solid #a8c5ff; outline-offset: 3px; }

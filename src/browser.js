@@ -57,7 +57,7 @@ function navigate(s, value) {
 function sync(s) {
   if (!s.created || s.closed) return;
   const r = s.host.getBoundingClientRect();
-  const visible = s.api.isVisible && s.element.isConnected && !!s.element.getClientRects().length && document.visibilityState === 'visible' && !document.body.classList.contains('space-dialog-open') && !document.body.classList.contains('app-menu-open') && !document.body.classList.contains('settings-open') && r.width > 1 && r.height > 1;
+  const visible = s.api.isVisible && s.element.isConnected && !!s.element.getClientRects().length && document.visibilityState === 'visible' && !document.querySelector('dialog[open]') && !document.body.classList.contains('custom-dialog-open') && !document.body.classList.contains('space-dialog-open') && !document.body.classList.contains('app-menu-open') && !document.body.classList.contains('settings-open') && r.width > 1 && r.height > 1;
   const scale = window.devicePixelRatio || 1;
   const rect = { x: Math.round(r.left * scale), y: Math.round(r.top * scale), w: Math.max(0, Math.round(r.width * scale)), h: Math.max(0, Math.round(r.height * scale)), visible };
   const key = JSON.stringify(rect); if (key === s.key) return; s.key = key;
@@ -88,3 +88,4 @@ window.addEventListener('space-dialog-visibility', () => sessions.forEach(sync))
 window.addEventListener('app-menu-visibility', () => sessions.forEach(sync));
 
 window.addEventListener('settings-visibility', () => sessions.forEach(sync));
+window.addEventListener('custom-dialog-visibility', () => sessions.forEach(sync));

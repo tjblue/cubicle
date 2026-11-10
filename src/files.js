@@ -1,6 +1,8 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { createTextPreview } from './text-preview.js';
 import { createMarkdownEditor } from './markdown-editor.js';
+import { chooseAction } from './confirm-dialog.js';
+import { assignHeadingIds, LOCAL_IMAGE_PREFIX } from './markdown-safety.js';
 
 const sessions = new Map();
 
@@ -24,53 +26,17 @@ function fileIcon(name, directory) {
 export function hasFiles(id) { return sessions.has(id); }
 export function closeFiles(id) { const root = sessions.get(id); root?.disposePreview?.(); root?.remove(); sessions.delete(id); }
 
-// Build Markdown as DOM nodes, so file contents never become executable HTML.
-function renderMarkdown(text, target, outline) {
-  const headings = [];
-  const inline = (parent, value) => {
-    const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
-    let at = 0;
-    for (const match of value.matchAll(pattern)) {
-      parent.append(document.createTextNode(value.slice(at, match.index)));
-      const token = match[0]; let el;
-      if (token[0] === '`') { el = document.createElement('code'); el.textContent = token.slice(1, -1); }
-      else if (token.startsWith('**')) { el = document.createElement('strong'); el.textContent = token.slice(2, -2); }
-      else if (token[0] === '*') { el = document.createElement('em'); el.textContent = token.slice(1, -1); }
-      else { el = document.createElement('span'); el.textContent = token.slice(1, token.indexOf(']')); el.title = token.slice(token.indexOf('(') + 1, -1); }
-      parent.append(el); at = match.index + token.length;
-    }
-    parent.append(document.createTextNode(value.slice(at)));
-  };
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
-  let list = null, paragraph = null, fence = null;
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) { if (fence) { fence = null; } else { const pre = document.createElement('pre'); fence = document.createElement('code'); pre.append(fence); target.append(pre); } list = paragraph = null; continue; }
-    if (fence) { fence.textContent += (fence.textContent ? '\n' : '') + line; continue; }
-    const heading = line.match(/^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
-    if (heading) { const el = document.createElement(`h${heading[1].length}`); inline(el, heading[2]); target.append(el); headings.push(el); list = paragraph = null; continue; }
-    const item = line.match(/^\s*([-*+] |\d+\. )(.+)$/);
-    if (item) { const tag = /\d/.test(item[1][0]) ? 'ol' : 'ul'; if (!list || list.tagName.toLowerCase() !== tag) { list = document.createElement(tag); target.append(list); } const li = document.createElement('li'); inline(li, item[2]); list.append(li); paragraph = null; continue; }
-    list = null;
-    if (!line.trim()) { paragraph = null; continue; }
-    if (!paragraph) { paragraph = document.createElement('p'); target.append(paragraph); } else paragraph.append(document.createTextNode(' '));
-    inline(paragraph, line);
-  }
-  if (headings.length) {
-    const label = document.createElement('strong'); label.textContent = 'On this page'; outline.append(label);
-    for (const heading of headings) { const button = document.createElement('button'); button.textContent = heading.textContent; button.style.paddingLeft = `${8 + (Number(heading.tagName[1]) - 1) * 10}px`; button.onclick = () => heading.scrollIntoView({ behavior: 'smooth', block: 'start' }); outline.append(button); }
-    outline.hidden = false;
-  }
-}
-
 export function openFileInPane(id, path) { return sessions.get(id)?.openFilePath?.(path) ?? false; }
-export function saveFilePane(id) { return sessions.get(id)?.saveMarkdown?.(); }
+export async function saveFilePane(id) { return await sessions.get(id)?.saveMarkdown?.() ?? true; }
 export function filePaneDirty(id) { return sessions.get(id)?.isDirty?.() ?? false; }
+export function dirtyFilePaneIds() { return [...sessions].filter(([, root]) => root.isDirty?.()).map(([id]) => id); }
+export async function confirmFilePaneNavigation(id) { return await sessions.get(id)?.confirmNavigation?.() ?? true; }
 export function setFilesRoot(id, path) { sessions.get(id)?.setSpaceRoot?.(path); }
 
 export function mountFiles(id, container, onBack, initialPath = null, pins = [], options = {}) {
-  if (sessions.has(id)) { const existing = sessions.get(id); existing.onStateChange = options.onStateChange; container.append(existing); return; }
+  if (sessions.has(id)) { const existing = sessions.get(id); existing.onStateChange = options.onStateChange; existing.onOpenUrl = options.onOpenUrl; container.append(existing); return; }
   const root = document.createElement('div'); root.className = 'files-view'; sessions.set(id, root); container.append(root);
-  root.onStateChange = options.onStateChange;
+  root.onStateChange = options.onStateChange; root.onOpenUrl = options.onOpenUrl;
   root.innerHTML = `<div class="files-body"><section class="files-preview"><div class="files-preview-header"><span class="files-preview-icon" aria-hidden="true">▤</span><div class="files-preview-label"><div class="files-preview-title">Select a file</div><small class="files-preview-meta">Preview appears here</small></div><button class="files-edit" type="button" hidden>Edit</button><button class="files-save" type="button" hidden>Save</button></div><div class="files-preview-content"><div class="files-document">Choose a file in the tree to preview it.</div></div><aside class="files-outline" aria-label="Document outline" hidden></aside></section><div class="files-divider" role="separator" aria-label="Resize file tree" aria-orientation="vertical" aria-valuemin="125" tabindex="0"></div><aside class="files-sidebar"><div class="files-root-bar"><button class="files-root" type="button" title="Change folder"><span aria-hidden="true">▱</span><span class="files-root-name">Folder</span><span class="files-root-edit" aria-hidden="true">⌄</span></button><button class="files-refresh" type="button" title="Refresh folder" aria-label="Refresh folder">↻</button></div><form class="files-path" hidden><input aria-label="Folder path" placeholder="Enter folder path and press Enter" spellcheck="false"><button class="files-path-cancel" type="button" aria-label="Cancel">×</button></form><input class="files-filter" type="search" aria-label="Filter loaded files" placeholder="⌕  Filter files…"><div class="files-tree" aria-label="File tree"></div></aside></div><div class="files-status" role="status"></div>`;
   if (pins.length) { const links = document.createElement('div'); links.className = 'profile-links'; for (const pin of pins) { const button = document.createElement('button'); button.type = 'button'; button.textContent = pin.name; button.title = pin.path; button.addEventListener('click', () => navigate(pin.path)); links.append(button); } root.querySelector('.files-sidebar').insertBefore(links, root.querySelector('.files-filter')); }
   const tree = root.querySelector('.files-tree'), pathInput = root.querySelector('.files-path input'), status = root.querySelector('.files-status');
@@ -82,11 +48,40 @@ export function mountFiles(id, container, onBack, initialPath = null, pins = [],
   const reportState = () => root.onStateChange?.({ root: current, preview: selected });
   const editButton = root.querySelector('.files-edit'), saveButton = root.querySelector('.files-save');
   root.isDirty = () => dirty;
-  function canDiscard() { return !dirty || window.confirm('Discard unsaved Markdown changes?'); }
+  let disposed = false, previewEditor = null, navigationPrompt = null;
+  const imageUrls = new Set();
+  function clearImageUrls() { for (const url of imageUrls) URL.revokeObjectURL(url); imageUrls.clear(); }
+  async function loadLocalImages(container, filePath, request) {
+    const cwd = filePath.replace(/[\\/][^\\/]*$/, '');
+    await Promise.all([...container.querySelectorAll('img')].map(async image => {
+      const src = image.getAttribute('src') || '';
+      if (!src.startsWith(LOCAL_IMAGE_PREFIX)) return;
+      try {
+        const relative = decodeURIComponent(src.slice(LOCAL_IMAGE_PREFIX.length));
+        const path = await invoke('resolve_file_link', { path: relative.split(/[?#]/)[0], cwd });
+        const result = await invoke('preview_image', { path });
+        if (disposed || request !== previewGeneration || !container.isConnected) return;
+        const url = URL.createObjectURL(new Blob([new Uint8Array(result.data)], { type: result.mime }));
+        imageUrls.add(url); image.src = url;
+      } catch { image.removeAttribute('src'); }
+    }));
+  }
+  async function confirmNavigation() {
+    if (!dirty) return true;
+    if (navigationPrompt) return navigationPrompt;
+    navigationPrompt = (async () => {
+      const choice = await chooseAction({ title: 'Unsaved changes', message: 'Save changes to this Markdown file before leaving?', choices: [{ value: 'save', label: 'Save' }, { value: 'discard', label: 'Discard', danger: true }, { value: 'cancel', label: 'Cancel' }], cancelValue: 'cancel' });
+      if (choice === 'save') return await saveMarkdown();
+      return choice === 'discard';
+    })().finally(() => { navigationPrompt = null; });
+    return navigationPrompt;
+  }
+  root.confirmNavigation = confirmNavigation;
   async function closeEditor() { editorGeneration++; const old = editor; editor = null; if (old) await old.destroy(); }
   let textPreview = null;
   function clearTextPreview() { textPreview?.destroy(); textPreview = null; documentBody.classList.remove('code-preview'); }
-  root.disposePreview = () => { clearTextPreview(); void closeEditor(); }; 
+  root.disposePreview = () => { disposed = true; generation++; previewGeneration++; clearTextPreview(); void closeEditor(); void destroyPreview(); };
+  async function destroyPreview() { clearImageUrls(); const old = previewEditor; previewEditor = null; if (old) await old.destroy(); }
   const expanded = new Set();
   const divider = root.querySelector('.files-divider'), body = root.querySelector('.files-body'), sidebar = root.querySelector('.files-sidebar');
   function resizeSidebar(width) {
@@ -139,52 +134,80 @@ export function mountFiles(id, container, onBack, initialPath = null, pins = [],
     if (!node.children) { const request = generation; try { const result = await invoke('list_files', { path: node.path }); if (request !== generation) return; node.children = result.entries; node.error = ''; } catch (error) { if (request !== generation) return; node.error = `Cannot open folder: ${error}`; } drawTree(); }
   }
   async function openFile(node) {
-    if (!canDiscard()) return false;
-    await closeEditor(); dirty = false; currentNode = node; original = ''; editButton.hidden = true; saveButton.hidden = true;
-    clearTextPreview(); selected = node.path; const request = ++previewGeneration; drawTree(); title.textContent = node.name; meta.textContent = node.name.split('.').pop().toUpperCase() + ' · Read-only preview'; documentBody.textContent = 'Loading…'; outline.replaceChildren(); outline.hidden = true;
+    if (selected === node.path) return true;
+    if (!await confirmNavigation() || disposed) return false;
+    const request = ++previewGeneration; await closeEditor(); await destroyPreview(); if (disposed || request !== previewGeneration) return false; dirty = false; currentNode = node; original = ''; editButton.hidden = true; saveButton.hidden = true;
+    clearTextPreview(); selected = node.path; drawTree(); title.textContent = node.name; meta.textContent = node.name.split('.').pop().toUpperCase() + ' · Read-only preview'; documentBody.textContent = 'Loading…'; outline.replaceChildren(); outline.hidden = true;
     reportState();
-    try { const text = await invoke('preview_file', { path: node.path }); if (request !== previewGeneration) return; original = text; documentBody.replaceChildren(); const markdown = /\.(?:md|mdown|markdown)$/i.test(node.name); editButton.hidden = !markdown; documentBody.classList.toggle('markdown', markdown); if (markdown) renderMarkdown(text, documentBody, outline); else { documentBody.classList.add('code-preview'); textPreview = createTextPreview(documentBody, node.name, text); } }
+    try { const text = await invoke('preview_file', { path: node.path }); if (request !== previewGeneration || disposed) return false; original = text; documentBody.replaceChildren(); const markdown = /\.(?:md|mdown|markdown)$/i.test(node.name); editButton.hidden = !markdown; documentBody.classList.toggle('markdown', markdown); if (markdown) { const mount = document.createElement('div'); documentBody.replaceChildren(mount); const created = await createMarkdownEditor(mount, text, () => {}, { readOnly: true }); if (request !== previewGeneration || disposed) { await created.destroy(); return false; } previewEditor = created; updateEditorOutline(); void loadLocalImages(mount, node.path, request); } else { documentBody.classList.add('code-preview'); textPreview = createTextPreview(documentBody, node.name, text); } return true; }
     catch (error) { if (request === previewGeneration) documentBody.textContent = `Cannot preview file: ${error}`; }
   }
   async function navigate(path, restoring = false) {
-    if (!canDiscard()) return;
-    await closeEditor(); dirty = false; currentNode = null; editButton.hidden = true; saveButton.hidden = true;
-    const request = ++generation; ++previewGeneration; clearTextPreview(); status.textContent = 'Loading…';
-    try { const result = await invoke('list_files', { path }); if (request !== generation) return; current = result.path; const display = displayPath(current); pathInput.value = display; const segments = display.replace(/[\\/]+$/, '').split(/[\\/]/); rootName.textContent = segments.pop() || display; rootLabel.title = `${display} — click to change folder`; pathForm.hidden = true; rootNode = { children: result.entries }; expanded.clear(); selected = null; title.textContent = 'Select a file'; meta.textContent = 'Preview appears here'; documentBody.classList.remove('markdown'); documentBody.textContent = 'Choose a file in the tree to preview it.'; outline.hidden = true; outline.replaceChildren(); drawTree(); status.textContent = 'Filter searches loaded folders.'; if (!restoring) reportState(); return true; }
+    if (!await confirmNavigation() || disposed) return false;
+    const request = ++generation, previewRequest = ++previewGeneration; status.textContent = 'Loading...';
+    try { const result = await invoke('list_files', { path }); if (request !== generation || previewRequest !== previewGeneration || disposed) return false; await closeEditor(); await destroyPreview(); if (request !== generation || previewRequest !== previewGeneration || disposed) return false; dirty = false; currentNode = null; editButton.hidden = true; saveButton.hidden = true; clearTextPreview(); current = result.path; const display = displayPath(current); pathInput.value = display; const segments = display.replace(/[\\/]+$/, '').split(/[\\/]/); rootName.textContent = segments.pop() || display; rootLabel.title = `${display} — click to change folder`; pathForm.hidden = true; rootNode = { children: result.entries }; expanded.clear(); selected = null; title.textContent = 'Select a file'; meta.textContent = 'Preview appears here'; documentBody.classList.remove('markdown'); documentBody.textContent = 'Choose a file in the tree to preview it.'; outline.hidden = true; outline.replaceChildren(); drawTree(); status.textContent = 'Filter searches loaded folders.'; if (!restoring) reportState(); return true; }
     catch (error) { if (request === generation) status.textContent = `Cannot open folder: ${error}`; }
   }
-  root.openFilePath = path => { const name = path.split(/[\\/]/).pop(); void initialLoad.then(() => openFile({ path, name, directory: false })); return true; };
+  root.openFilePath = path => { const name = path.split(/[\\/]/).pop(); return initialLoad.then(() => openFile({ path, name, directory: false })); };
   function updateEditorOutline() {
     outline.replaceChildren();
     const headings = [...documentBody.querySelectorAll('.ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4, .ProseMirror h5, .ProseMirror h6')];
     if (!headings.length) { outline.hidden = true; return; }
     const label = document.createElement('strong'); label.textContent = 'On this page'; outline.append(label);
+    assignHeadingIds(headings);
     for (const heading of headings) { const button = document.createElement('button'); button.textContent = heading.textContent; button.style.paddingLeft = `${8 + (Number(heading.tagName[1]) - 1) * 10}px`; button.onclick = () => heading.scrollIntoView({ behavior: 'smooth', block: 'start' }); outline.append(button); }
     outline.hidden = false;
   }
+  documentBody.addEventListener('click', async event => {
+    const link = event.target.closest('a'); if (!link || editor) return;
+    event.preventDefault();
+    const href = link.getAttribute('href') || '';
+    if (/^https?:\/\//i.test(href)) { root.onOpenUrl?.(href); return; }
+    if (href.startsWith('#')) { const target = [...documentBody.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(el => el.id === href.slice(1)); target?.scrollIntoView(); return; }
+    if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//')) return;
+    try { const cwd = selected?.replace(/[\\/][^\\/]*$/, ''); const path = await invoke('resolve_file_link', { path: decodeURIComponent(href.split('#')[0]), cwd }); await root.openFilePath(path); }
+    catch (error) { status.textContent = `Cannot open link: ${error}`; }
+  });
   editButton.onclick = async () => {
     if (!currentNode || editor) return;
-    const generationAtStart = ++editorGeneration; editButton.disabled = true;
-    documentBody.replaceChildren(); outline.hidden = true;
+    ++previewGeneration; const generationAtStart = ++editorGeneration; editButton.disabled = true;
+    await destroyPreview(); if (generationAtStart !== editorGeneration || disposed) { editButton.disabled = false; return; }
+    const mount = document.createElement('div'); documentBody.replaceChildren(mount); outline.hidden = true;
     try {
-      const created = await createMarkdownEditor(documentBody, original, () => { dirty = true; saveButton.disabled = false; meta.textContent = 'Unsaved changes'; updateEditorOutline(); });
+      const created = await createMarkdownEditor(mount, original, () => { dirty = true; saveButton.disabled = false; meta.textContent = 'Unsaved changes'; updateEditorOutline(); });
       if (generationAtStart !== editorGeneration) { await created.destroy(); return; }
       editor = created; updateEditorOutline(); editButton.hidden = true; saveButton.hidden = false; saveButton.disabled = true; meta.textContent = 'Editing Markdown';
     } catch (error) { documentBody.textContent = `Cannot edit file: ${error}`; }
     finally { editButton.disabled = false; }
   };
   async function saveMarkdown() {
-    if (!editor || !dirty || !currentNode) return;
+    if (!dirty) return true;
+    if (!editor || !currentNode) return false;
     const content = editor.markdown(), node = currentNode, activeEditor = editor; saveButton.disabled = true;
-    try { await invoke('save_markdown', { path: node.path, original, content }); if (editor === activeEditor) { original = content; dirty = editor.markdown() !== content; meta.textContent = dirty ? 'Unsaved changes' : 'Saved'; } }
-    catch (error) { meta.textContent = `Save failed: ${error}`; }
+    try { await invoke('save_markdown', { path: node.path, original, content }); if (editor === activeEditor) { original = content; dirty = editor.markdown() !== content; meta.textContent = dirty ? 'Unsaved changes' : 'Saved'; return !dirty; } return false; }
+    catch (error) { meta.textContent = `Save failed: ${error}`; return false; }
     finally { if (editor === activeEditor) saveButton.disabled = !dirty; }
   }
   root.saveMarkdown = saveMarkdown;
   saveButton.onclick = saveMarkdown;
   root.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && editor) { event.preventDefault(); void saveMarkdown(); } });
   root.setSpaceRoot = path => { if (isTauri()) navigate(path); };
-  root.querySelector('.files-refresh').onclick = () => navigate(current);
+  root.querySelector('.files-refresh').onclick = async () => {
+    const request = ++generation, scroll = tree.scrollTop;
+    status.textContent = 'Refreshing...';
+    try {
+      const result = await invoke('list_files', { path: current });
+      async function restore(nodes) {
+        await Promise.all(nodes.filter(node => node.directory && expanded.has(node.path)).map(async node => {
+          try { const children = await invoke('list_files', { path: node.path }); node.children = children.entries; await restore(node.children); }
+          catch (error) { node.error = `Cannot open folder: ${error}`; }
+        }));
+      }
+      await restore(result.entries);
+      if (request !== generation || disposed) return;
+      rootNode = { children: result.entries }; drawTree(); tree.scrollTop = scroll; status.textContent = 'Filter searches loaded folders.';
+    } catch (error) { if (request === generation && !disposed) status.textContent = `Cannot refresh folder: ${error}`; }
+  };
   rootLabel.onclick = () => { pathForm.hidden = !pathForm.hidden; if (!pathForm.hidden) { pathInput.value = current ? displayPath(current) : ''; pathInput.focus(); pathInput.select(); } };
   root.querySelector('.files-path-cancel').onclick = () => { pathForm.hidden = true; rootLabel.focus(); };
   pathInput.onkeydown = event => { if (event.key === 'Escape') { pathForm.hidden = true; rootLabel.focus(); } };

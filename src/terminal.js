@@ -23,7 +23,7 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
-    session = { id: crypto.randomUUID(), element, terminal, fit, started: false, closed: false, ready: null, input: Promise.resolve(), cwd, onFileLink, onCwdChange: options.onCwdChange };
+    session = { id: crypto.randomUUID(), element, terminal, fit, started: false, starting: false, closed: false, ready: null, input: Promise.resolve(), cwd, onFileLink, onCwdChange: options.onCwdChange };
     const updateCwd = path => {
       if (session.closed || !path || session.cwd === path) return;
       session.cwd = path;
@@ -47,12 +47,9 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
       session.title = title.replace(/[\x00-\x1f\x7f]/g, '').trim();
       session.onTitleChange(session.title);
     });
-    const channel = new Channel();
-    channel.onmessage = (event) => {
-      if (session.closed) return;
-      if (event.type === 'output') terminal.write(new Uint8Array(event.data));
-      if (event.type === 'exit') { session.started = false; terminal.writeln('\r\n\x1b[90m[Terminal session ended. Close this tab to start another.]\x1b[0m'); }
-    };
+    const restart = document.createElement('button'); restart.type = 'button'; restart.className = 'terminal-restart'; restart.textContent = 'Restart terminal'; restart.hidden = true;
+    element.append(restart);
+    restart.addEventListener('click', () => { if (session.closed || session.started || session.starting) return; session.id = crypto.randomUUID(); session.ready = start(false); });
     session.resize = () => {
       if (session.closed || !element.isConnected || !element.clientWidth || !element.clientHeight) return;
       try {
@@ -97,12 +94,21 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
         if (!session.closed && session.started) return invoke('terminal_write', { id: session.id, data });
       }).catch((error) => { if (!session.closed) terminal.writeln(`\r\n\x1b[31mInput error: ${error}\x1b[0m`); });
     });
-    session.ready = new Promise((resolve) => requestAnimationFrame(resolve)).then(async () => {
+    const start = (runCommand) => {
+      const runtimeId = session.id; let exited = false; let failed = false;
+      session.starting = true; restart.hidden = true;
+      return new Promise((resolve) => requestAnimationFrame(resolve)).then(async () => {
+      const channel = new Channel();
+      channel.onmessage = event => {
+        if (session.closed || failed || session.id !== runtimeId) return;
+        if (event.type === 'output') terminal.write(new Uint8Array(event.data));
+        if (event.type === 'exit') { exited = true; session.started = false; if (!session.starting) restart.hidden = false; terminal.writeln('\r\n\x1b[90m[Terminal session ended.]\x1b[0m'); }
+      };
       if (session.closed) return;
       session.resize();
       if (!isTauri()) throw new Error('Open the desktop app to use a terminal.');
-      let startupCwd = cwd;
-      if (options.savedCwd && startupCwd) {
+      let startupCwd = session.cwd;
+      if ((options.savedCwd || !runCommand) && startupCwd) {
         try { await invoke('validate_directory', { path: startupCwd }); }
         catch {
           terminal.writeln('\r\n\x1b[33m[The saved folder is unavailable; opening the default folder.]\x1b[0m');
@@ -111,14 +117,26 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
           updateCwd(startupCwd || await invoke('terminal_default_cwd'));
         }
       }
-      await invoke('terminal_start', { id: session.id, cols: terminal.cols, rows: terminal.rows, cwd: startupCwd, shell: options.shell || null, env: options.env || null, output: channel });
+      await invoke('terminal_start', { id: runtimeId, cols: terminal.cols, rows: terminal.rows, cwd: startupCwd, shell: options.shell || null, env: options.env || null, output: channel });
       if (!session.cwd) updateCwd(await invoke('terminal_default_cwd'));
       if (session.cwd) session.onCwdChange?.(session.cwd);
-      if (options.command && !session.closed) await invoke('terminal_write', { id: session.id, data: options.command + '\r' });
+      if (exited || session.closed) return;
       session.started = true;
+      if (runCommand && options.command) await invoke('terminal_write', { id: runtimeId, data: options.command + '\r' });
       session.resize();
       terminal.focus();
-    }).catch((error) => { if (!session.closed) terminal.writeln(`\r\n\x1b[31mCould not start terminal: ${error}\x1b[0m`); });
+      }).catch(async (error) => {
+        failed = true; session.started = false;
+        // Startup may fail after the backend created a process (for example, when
+        // sending the profile command). Always release this particular runtime.
+        await invoke('terminal_close', { id: runtimeId }).catch(() => {});
+        if (!session.closed) terminal.writeln(`\r\n\x1b[31mCould not start terminal: ${error}\x1b[0m`);
+      }).finally(() => {
+        session.starting = false;
+        if (!session.closed && (failed || exited)) restart.hidden = false;
+      });
+    };
+    session.ready = start(true);
   } else {
     session.onTitleChange = onTitleChange;
     session.onFileLink = onFileLink;
@@ -151,5 +169,6 @@ export function closeTerminal(id) {
   clearTimeout(session.resizeTimer);
   session.terminal.dispose();
   // A close during startup waits for the spawn command to finish first.
-  session.ready.finally(() => invoke('terminal_close', { id: session.id }).catch(() => {}));
+  const runtimeId = session.id;
+  session.ready.finally(() => invoke('terminal_close', { id: runtimeId }).catch(() => {}));
 }
