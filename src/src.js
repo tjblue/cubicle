@@ -8,6 +8,7 @@ import './ui-controls.css';
 import { mountFiles, hasFiles, closeFiles, setFilesRoot, openFileInPane, filePaneDirty, saveFilePane, dirtyFilePaneIds, confirmFilePaneNavigation } from './files.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { browserControls, closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
 import { getFavorites, removeFavorite } from './browser-favorites.js';
 import { captureTerminalDirectories, closeTerminal, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
@@ -964,8 +965,7 @@ renderProfiles();
 if (isTauri()) {
   let closing = false;
   const appWindow = getCurrentWindow();
-  appWindow.onCloseRequested(async event => {
-    event.preventDefault();
+  async function quitCubicle() {
     if (closing) return;
     closing = true;
     try {
@@ -987,5 +987,11 @@ if (isTauri()) {
       console.error('Could not close Cubicle:', error);
       alert(`Could not close Cubicle: ${error}`);
     }
+  }
+  appWindow.onCloseRequested(async event => {
+    event.preventDefault();
+    if (await invoke('close_to_tray_enabled')) return;
+    await quitCubicle();
   }).catch(error => console.error('Could not register close handler:', error));
+  listen('tray-quit-requested', quitCubicle).catch(error => console.error('Could not register tray quit handler:', error));
 }

@@ -348,8 +348,56 @@ fn install_session_hook(path: &std::path::Path, script: &std::path::Path, provid
     Ok(())
 }
 
+#[tauri::command]
+fn close_to_tray_enabled() -> bool { cfg!(windows) }
+
 fn main() {
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            #[cfg(windows)]
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .setup(|app| {
+            #[cfg(windows)]
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let show = MenuItem::with_id(app, "show", "Show Cubicle", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show, &quit])?;
+                let icon = app.default_window_icon().cloned().expect("default app icon is configured");
+
+                TrayIconBuilder::new()
+                    .icon(icon)
+                    .menu(&menu)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "show" => show_main_window(app),
+                        "quit" => {
+                            show_main_window(app);
+                            let _ = app.emit("tray-quit-requested", ());
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            show_main_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+            }
+            Ok(())
+        })
         .register_uri_scheme_protocol("browsermeta", |ctx, request| {
             if request.method() == tauri::http::Method::POST && request.body().len() < 8192 {
                 if let Some(id) = ctx.webview_label().strip_prefix("browser-") {
@@ -361,7 +409,7 @@ fn main() {
             tauri::http::Response::builder().status(204).header("Access-Control-Allow-Origin", "*").body(Vec::new()).unwrap()
         })
         .manage(Terminals::default())
-        .invoke_handler(tauri::generate_handler![terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_file_url, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![close_to_tray_enabled, terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_file_url, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
         .build(tauri::generate_context!())
         .expect("failed to build Cubicle")
         .run(|app, event| {
@@ -373,6 +421,14 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(windows)]
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }
 
 #[cfg(all(test, windows))]
