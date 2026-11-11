@@ -528,3 +528,25 @@ header.app-menubar { flex: none; justify-content: flex-start; gap: 0; height: 37
 
 .files-glyph-folder svg, .files-root-icon svg { display: block; width: 16px; height: 16px; }
 .files-root-icon { flex: none; display: grid; place-items: center; color: #94acd3; }
+
+/* Browser extension settings */
+.extensions-card { padding: 16px; }
+.extensions-toolbar, .extensions-actions, .extensions-discovery-heading { display: flex; align-items: center; gap: 8px; }
+.extensions-toolbar { flex-wrap: wrap; }
+.extensions-card button { padding: 7px 11px; color: #dce5f5; background: #303747; border: 1px solid #4b5364; border-radius: 5px; cursor: pointer; font: inherit; font-size: 12px; }
+.extensions-card button:hover { background: #3b465a; }
+.extensions-card button:disabled { opacity: .5; cursor: default; }
+.extensions-status { margin: 10px 0 0; color: #b6c7ea; font-size: 12px; }
+.extensions-status:empty { display: none; }
+.extensions-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-bottom: 1px solid #343a46; }
+.extensions-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.extensions-info { min-width: 0; }
+.extensions-info strong, .extensions-info small { display: block; }
+.extensions-info strong, .extensions-discovery-heading strong { font-size: 12px; }
+.extensions-info small, .extensions-empty, .extensions-note, .extensions-discovery-heading p { color: #98a4ba; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.extensions-info small { margin-top: 4px; }
+.extensions-actions { flex: none; }
+.extensions-actions input { width: 16px; height: 16px; accent-color: #8ca9ed; }
+.extensions-discovery-heading { justify-content: space-between; }
+.extensions-discovery-heading p { margin: 4px 0 0; }
+.extensions-note { margin-top: 10px; }

@@ -2,6 +2,8 @@
 
 Cubicle is a Tauri workspace for terminal, file, and browser panes.
 
+On Windows, Settings → Browser extensions can import an unpacked extension folder or discover extensions in an Edge profile. Open a browser pane before installing, enabling, disabling, or removing an extension. Imports are copied into Cubicle's data directory and use a separate browser profile. WebView2 does not provide the usual browser toolbar and popup entry points, so some extensions may not work fully. Extension updates must currently be imported manually.
+
 ## Development
 
 Install Node.js, Rust, and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/), then run from this folder:
