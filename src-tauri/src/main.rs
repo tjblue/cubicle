@@ -361,7 +361,7 @@ fn main() {
             tauri::http::Response::builder().status(204).header("Access-Control-Allow-Origin", "*").body(Vec::new()).unwrap()
         })
         .manage(Terminals::default())
-        .invoke_handler(tauri::generate_handler![terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
         .build(tauri::generate_context!())
         .expect("failed to build Cubicle")
         .run(|app, event| {
@@ -460,6 +460,17 @@ async fn choose_space_folder(initial_path: Option<String>) -> Result<Option<Stri
                 picker = picker.set_directory(path);
             }
             Ok(picker.pick_folder().map(|path| path.to_string_lossy().into_owned()))
+    }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn choose_file_folder(initial_path: Option<String>) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut picker = rfd::FileDialog::new().set_title("Choose a folder");
+        if let Some(path) = initial_path.filter(|path| std::path::Path::new(path).is_dir()) {
+            picker = picker.set_directory(path);
+        }
+        Ok(picker.pick_folder().map(|path| path.to_string_lossy().into_owned()))
     }).await.map_err(|error| error.to_string())?
 }
 

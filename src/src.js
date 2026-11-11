@@ -104,8 +104,8 @@ class DemoPane {
       api.setTitle('Files');
       content.replaceChildren();
       mountFiles(api.id, content, showStart, params.filesRoot || params.profileRoot || currentSpacePath(), params.profilePins || [], {
-        preview: params.filesPreview || params.openFile,
-        onStateChange: state => savePaneState(api.id, 'files', { filesRoot: state.root, filesPreview: state.preview, openFile: undefined }),
+        preview: params.filesPreview || params.openFile, filePins: params.filePins || [],
+        onStateChange: state => savePaneState(api.id, 'files', { filesRoot: state.root, filesPreview: state.preview, filePins: state.filePins, openFile: undefined }),
         onOpenUrl: url => openBrowserLink(url, api.id),
       });
     };
