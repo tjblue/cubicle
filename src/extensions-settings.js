@@ -8,6 +8,8 @@ const candidates = byId('extensions-candidates');
 const discovery = byId('extensions-discovery');
 let edgePath = null;
 let busy = false;
+let installedItems = [];
+let supported = true;
 
 function button(label, action) {
   const element = document.createElement('button');
@@ -19,6 +21,7 @@ function note(target, message) {
 }
 function row(item) {
   const element = document.createElement('div'); element.className = 'extensions-row';
+  const icon = document.createElement('div'); icon.className = 'extension-icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = (item.name || '?').trim().charAt(0).toUpperCase(); element.append(icon);
   const info = document.createElement('div'); info.className = 'extensions-info';
   const name = document.createElement('strong'); name.textContent = item.name || item.id;
   const detail = document.createElement('small'); detail.textContent = [item.version && `Version ${item.version}`, item.description].filter(Boolean).join(' · ');
@@ -37,20 +40,34 @@ async function refresh() {
   installed.replaceChildren();
   byId('extensions-import-edge').disabled = !result.supported;
   byId('extensions-import-folder').disabled = !result.supported;
+  supported = result.supported; installedItems = result.items;
   if (!result.supported) { note(installed, 'Browser extensions are currently available on Windows.'); return; }
   if (result.runtime_error) status.textContent = `Browser status unavailable: ${result.runtime_error}`;
   edgePath = result.edge_path || edgePath;
-  if (!result.items.length) { note(installed, 'No extensions installed yet.'); return; }
-  for (const item of result.items) {
+  renderInstalled();
+}
+function renderInstalled() {
+  installed.replaceChildren();
+  const query = byId('extensions-search').value.trim().toLowerCase();
+  const items = installedItems.filter(item => [item.name, item.description, item.version].some(value => (value || '').toLowerCase().includes(query)));
+  byId('extensions-count').textContent = `${installedItems.length} installed`;
+  if (!supported) { note(installed, 'Browser extensions are currently available on Windows.'); return; }
+  if (!items.length) { note(installed, query ? 'No extensions match your search.' : 'No extensions installed yet.'); return; }
+  for (const item of items) {
     const { element, actions } = row(item);
     const state = document.createElement('small');
     state.textContent = item.runtime_missing ? 'Not installed in WebView2' : item.runtime_enabled == null ? 'Browser status unavailable' : item.runtime_enabled ? 'Enabled in WebView2' : 'Disabled in WebView2';
     element.querySelector('.extensions-info').append(state);
     const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = item.runtime_enabled ?? item.enabled;
-    toggle.disabled = !!result.runtime_error || item.runtime_missing;
+    toggle.disabled = item.runtime_enabled == null || item.runtime_missing;
     toggle.setAttribute('aria-label', `Enable ${item.name}`);
     toggle.addEventListener('change', () => run(async () => { try { await invoke('extensions_set_enabled', { id: item.id, enabled: toggle.checked }); await refresh(); } catch (error) { toggle.checked = !toggle.checked; throw error; } }));
-    actions.append(toggle, button('Remove', () => run(async () => { if (await chooseAction({ title: 'Remove extension?', message: `Remove ${item.name} from Cubicle?`, choices: [{ label: 'Cancel', value: 'cancel' }, { label: 'Remove', value: 'remove', danger: true }] }) !== 'remove') return; await invoke('extensions_remove', { id: item.id }); await refresh(); })));
+    const details = document.createElement('details'); details.className = 'extension-details';
+    const summary = document.createElement('summary'); summary.textContent = 'Details';
+    const body = document.createElement('div'); body.className = 'extension-details-body';
+    for (const [label, value] of [['Version', item.version], ['ID', item.id], ['Source', item.source], ['Permissions', item.permissions?.join(', ') || 'None listed']]) { const line = document.createElement('p'); const title = document.createElement('strong'); title.textContent = `${label}: `; line.append(title, document.createTextNode(value || 'Unknown')); body.append(line); }
+    details.append(summary, body); actions.append(details, button('Remove', () => run(async () => { if (await chooseAction({ title: 'Remove extension?', message: `Remove ${item.name} from Cubicle?`, choices: [{ label: 'Cancel', value: 'cancel' }, { label: 'Remove', value: 'remove', danger: true }] }) !== 'remove') return; await invoke('extensions_remove', { id: item.id }); await refresh(); })));
+    actions.append(toggle);
     installed.append(element);
   }
 }
@@ -73,6 +90,7 @@ async function discover(path) {
     candidates.append(element);
   }
 }
+byId('extensions-search').addEventListener('input', renderInstalled);
 byId('extensions-refresh').addEventListener('click', () => run(refresh));
 byId('extensions-import-edge').addEventListener('click', () => run(() => discover(null)));
 byId('extensions-other-profile').addEventListener('click', () => run(async () => { const path = await invoke('extensions_choose_folder'); if (path) await discover(path); }));

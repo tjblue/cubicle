@@ -371,7 +371,9 @@ fn main() {
 
                 let show = MenuItem::with_id(app, "show", "Show Cubicle", true, None::<&str>)?;
                 let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-                let menu = Menu::with_items(app, &[&show, &quit])?;
+                let reload = MenuItem::with_id(app, "reload", "Reload interface", true, None::<&str>)?;
+                let restart = MenuItem::with_id(app, "restart", "Restart Cubicle", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show, &reload, &restart, &quit])?;
                 let icon = app.default_window_icon().cloned().expect("default app icon is configured");
 
                 TrayIconBuilder::new()
@@ -379,6 +381,10 @@ fn main() {
                     .menu(&menu)
                     .on_menu_event(|app, event| match event.id().as_ref() {
                         "show" => show_main_window(app),
+                        "reload" | "restart" => {
+                            show_main_window(app);
+                            let _ = app.emit(if event.id().as_ref() == "reload" { "tray-reload-requested" } else { "tray-restart-requested" }, ());
+                        }
                         "quit" => {
                             show_main_window(app);
                             let _ = app.emit("tray-quit-requested", ());
@@ -410,7 +416,7 @@ fn main() {
             tauri::http::Response::builder().status(204).header("Access-Control-Allow-Origin", "*").body(Vec::new()).unwrap()
         })
         .manage(Terminals::default())
-        .invoke_handler(tauri::generate_handler![extensions::extensions_list, extensions::extensions_inspect, extensions::extensions_choose_folder, extensions::extensions_discover_edge, extensions::extensions_import, extensions::extensions_set_enabled, extensions::extensions_remove, close_to_tray_enabled, terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_file_url, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![restart_app, extensions::extensions_list, extensions::extensions_inspect, extensions::extensions_choose_folder, extensions::extensions_discover_edge, extensions::extensions_import, extensions::extensions_set_enabled, extensions::extensions_remove, close_to_tray_enabled, terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_file_url, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
         .build(tauri::generate_context!())
         .expect("failed to build Cubicle")
         .run(|app, event| {
@@ -694,3 +700,6 @@ mod hook_config_tests {
         }
     }
 }
+
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) { app.restart(); }

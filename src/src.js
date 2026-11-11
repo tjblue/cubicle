@@ -868,6 +868,7 @@ function openSettings(section, opener) {
   appSidebar.inert = true;
   sidebarDivider.inert = true;
   window.dispatchEvent(new Event('settings-visibility'));
+  showSettingsSection(section || 'settings-app');
   const target = document.getElementById(section);
   if (target) { target.scrollIntoView({ block: 'start' }); target.focus({ preventScroll: true }); }
   else settingsClose.focus();
@@ -887,6 +888,31 @@ document.getElementById('menu-pane-settings').addEventListener('click', () => op
 document.getElementById('menu-terminal-settings').addEventListener('click', () => openSettings('settings-terminal', document.querySelector('.app-menu:nth-of-type(3) > summary')));
 settingsClose.addEventListener('click', closeSettings);
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !settingsPage.hidden && !menus.some(menu => menu.open)) { event.preventDefault(); closeSettings(); } });
+
+function showSettingsSection(id) {
+  const sections = settingsPage.querySelectorAll('.settings-content > section');
+  if (![...sections].some(section => section.id === id)) id = 'settings-app';
+  sections.forEach(section => { section.hidden = section.id !== id; });
+  settingsPage.querySelectorAll('.settings-nav a').forEach(link => {
+    if (link.hash === `#${id}`) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+}
+settingsPage.querySelector('.settings-nav').addEventListener('click', event => {
+  const link = event.target.closest('a');
+  if (!link) return;
+  event.preventDefault(); showSettingsSection(link.hash.slice(1));
+  document.getElementById(link.hash.slice(1)).focus({ preventScroll: true });
+});
+function updateAppearancePreview() {
+  const preview = settingsPage.querySelector('.appearance-preview');
+  preview.classList.toggle('soft', document.getElementById('soft-tabs').checked);
+  preview.classList.toggle('outlined', document.getElementById('blue-outline').checked);
+  preview.classList.toggle('integrated', document.getElementById('pane-chrome').value === 'integrated');
+  preview.classList.toggle('compact', document.getElementById('compact-cards').checked);
+}
+settingsPage.addEventListener('change', updateAppearancePreview);
+updateAppearancePreview();
 
 // Profiles are stored independently of spaces and their live pane IDs.
 const profileSelect = document.getElementById('profile-select'), profileJson = document.getElementById('profile-json'), profileStatus = document.getElementById('profile-status');
@@ -962,7 +988,26 @@ async function launchProfile() {
 document.getElementById('profile-launch').onclick = () => { void launchProfile().catch(e => { profileStatus.textContent = `Launch failed: ${e.message}`; }); };
 renderProfiles();
 
+async function recoverApp(restart = false) {
+  const action = restart ? 'restart Cubicle' : 'reload the interface';
+  if (!confirm(`This will ${action}. Running terminal sessions may be interrupted. Continue?`)) return;
+  const result = await confirmQuitChanges({
+    dirtyFilePaneIds, isProfileDirty: () => profileDirty, saveFilePane, saveProfile: saveProfileEdits,
+    choose: (count, dirtyProfile) => chooseAction({ title: 'Unsaved changes', message: 'Save changes before continuing? ' + [count && `${count} file(s)`, dirtyProfile && 'launch profile'].filter(Boolean).join(' and '), choices: [{ value: 'save', label: 'Save all' }, { value: 'discard', label: 'Discard', danger: true }, { value: 'cancel', label: 'Cancel' }] })
+  });
+  if (result !== 'proceed') { if (result !== 'cancel') alert('Some changes could not be saved. Review them before continuing.'); return; }
+  await captureTerminalDirectories();
+  if (!workspaceStorageLocked && !saveActiveSpace()) return;
+  if (restart && isTauri()) await invoke('restart_app');
+  else location.reload();
+}
+document.getElementById('app-reload').onclick = () => void recoverApp();
+document.getElementById('app-restart').onclick = () => void recoverApp(true);
+document.getElementById('restart-row').hidden = !isTauri();
+
 if (isTauri()) {
+  listen('tray-reload-requested', () => void recoverApp()).catch(console.error);
+  listen('tray-restart-requested', () => void recoverApp(true)).catch(console.error);
   let closing = false;
   const appWindow = getCurrentWindow();
   async function quitCubicle() {
