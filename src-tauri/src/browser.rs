@@ -10,9 +10,25 @@ pub(crate) struct BrowserEvent { pub id: String, pub kind: &'static str, pub val
 fn label(id: &str) -> String { format!("browser-{id}") }
 fn web_url(url: &str) -> Result<tauri::Url, String> {
     let url = tauri::Url::parse(url).map_err(|e| e.to_string())?;
-    if !matches!(url.scheme(), "http" | "https") { return Err("Only HTTP and HTTPS addresses are supported".into()); }
+    if !matches!(url.scheme(), "http" | "https" | "file") { return Err("Only HTTP, HTTPS, and file addresses are supported".into()); }
     Ok(url)
 }
+#[tauri::command]
+pub fn browser_file_url(path: String) -> Result<String, String> {
+    let path = std::path::PathBuf::from(path).canonicalize().map_err(|e| e.to_string())?;
+    if !path.is_file() || !path.extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("html") || s.eq_ignore_ascii_case("htm")) {
+        return Err("Choose an HTML file".into());
+    }
+    #[cfg(windows)]
+    let path = {
+        let text = path.to_string_lossy();
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") { std::path::PathBuf::from(format!(r"\\{unc}")) }
+        else if let Some(local) = text.strip_prefix(r"\\?\") { std::path::PathBuf::from(local) }
+        else { path.clone() }
+    };
+    tauri::Url::from_file_path(&path).map(|url| url.to_string()).map_err(|_| "Cannot convert path to a file URL".into())
+}
+
 #[tauri::command]
 pub async fn browser_create(app: AppHandle, id: String, url: String) -> Result<(), String> {
     let parsed = web_url(&url)?;
@@ -95,4 +111,21 @@ pub fn browser_action(app: AppHandle, id: String, action: String) -> Result<(), 
 pub fn browser_close(app: AppHandle, id: String) -> Result<(), String> {
     if let Some(view) = app.get_webview(&label(&id)) { view.close().map_err(|e| e.to_string())?; }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_file_url_round_trips_special_characters() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("hello # café.html");
+        std::fs::write(&file, "<h1>Hello</h1>").unwrap();
+        let url = browser_file_url(file.to_string_lossy().into_owned()).unwrap();
+        assert!(url.contains("%23"));
+        assert_eq!(web_url(&url).unwrap().to_file_path().unwrap().canonicalize().unwrap(), file.canonicalize().unwrap());
+        assert!(browser_file_url(dir.path().to_string_lossy().into_owned()).is_err());
+        assert!(web_url("javascript:alert(1)").is_err());
+    }
 }

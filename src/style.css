@@ -28,7 +28,7 @@ button:hover { background: #475065; }
 .pane-content.terminal-content { overflow: hidden; padding: 8px 8px 5px; }
 .terminal-surface { width: 100%; height: 100%; min-height: 0; }
 .terminal-surface .xterm { width: 100%; height: 100%; }
-.start-view { min-height: 100%; padding: 18px clamp(14px, 5%, 40px) 28px; }
+.start-view { display: flow-root; min-height: 100%; padding: 18px clamp(14px, 5%, 40px) 28px; }
 .address-form { display: flex; align-items: center; gap: 10px; max-width: 760px; height: 40px; margin: 0 auto; padding: 0 12px; color: #8e9ab3; background: #252a38; border: 1px solid transparent; border-radius: 9px; }
 .address-form:focus-within { border-color: #7284b0; }
 .address-form svg { width: 17px; height: 17px; flex: none; }
@@ -495,6 +495,21 @@ header.app-menubar { flex: none; justify-content: flex-start; gap: 0; height: 37
 .app-confirm-dialog > button.danger { color: #ffc2bd; border-color: #87555b; background: #452c35; }
 .app-confirm-dialog > button:focus-visible { outline: 2px solid #a8c5ff; outline-offset: 3px; }
 
+/* Saved sites on the new-tab page. */
+.start-favorites { margin-top: 32px; }
+.start-favorites[hidden] { display: none; }
+.start-favorites h2 { margin: 0 0 14px; color: #aab5cd; font-size: 12px; font-weight: 600; }
+.favorites-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+.favorite-item { position: relative; min-width: 0; }
+.favorite-open { display: flex; align-items: center; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 12px 8px; border: 0; background: transparent; color: #bbc6dd; font-size: 12px; }
+.favorite-open:hover { background: #252b39; }
+.favorite-icon svg, .favorite-icon img { display: block; width: 25px; height: 25px; object-fit: contain; color: #98a8c9; }
+.favorite-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.favorite-remove { position: absolute; top: 0; right: 0; padding: 1px 5px; border: 0; background: transparent; color: #aab5cd; opacity: 0; }
+.favorite-item:hover .favorite-remove, .favorite-item:focus-within .favorite-remove { opacity: 1; }
+.browser-controls .browser-favorite { font-size: 20px; color: #e6c87e; }
+
+.files-open-browser { margin-left: auto; flex: none; padding: 5px 10px; font-size: 12px; }
 /* Keep file actions compact in docked panes. */
 .files-preview-label { flex: 1; }
 .files-copy-path, .files-pin { flex: none; padding: 5px 7px; font-size: 11px; white-space: nowrap; }

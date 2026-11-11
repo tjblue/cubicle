@@ -8,7 +8,8 @@ import './ui-controls.css';
 import { mountFiles, hasFiles, closeFiles, setFilesRoot, openFileInPane, filePaneDirty, saveFilePane, dirtyFilePaneIds, confirmFilePaneNavigation } from './files.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
+import { browserControls, closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
+import { getFavorites, removeFavorite } from './browser-favorites.js';
 import { captureTerminalDirectories, closeTerminal, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
 
 const icons = {
@@ -74,20 +75,49 @@ class DemoPane {
       api.setTitle('New tab');
       content.classList.remove('browser-content', 'terminal-content');
       content.innerHTML = `<div class="start-view">
-
+        ${browserControls(true)}
         <div class="start-inner">
           <div class="start-heading"><h2>Tools</h2><p>Choose what to open in this tab.</p></div>
           <div class="tool-grid">
             <button class="tool-choice" data-tool="files" type="button"><span class="tool-icon">${icon('files')}</span><span class="tool-copy"><strong>Files</strong><small>Explore and preview files</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
             <button class="tool-choice" data-tool="terminal" type="button"><span class="tool-icon">${icon('terminal')}</span><span class="tool-copy"><strong>Terminal</strong><small>Work in a command line</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
-            <button class="tool-choice" data-tool="browser" type="button"><span class="tool-icon">${icon('browser')}</span><span class="tool-copy"><strong>Browser</strong><small>Browse the web</small></span><span class="tool-arrow" aria-hidden="true">›</span></button>
           </div>
+          <section class="start-favorites" aria-label="Favorites" hidden><h2>Favorites</h2><div class="favorites-grid"></div></section>
 
         </div>
       </div>`;
       content.querySelectorAll('[data-tool]').forEach((button) => {
         button.addEventListener('click', () => button.dataset.tool === 'terminal' ? showTerminal() : button.dataset.tool === 'files' ? showFiles() : showBrowser());
       });
+      content.querySelector('form').addEventListener('submit', event => {
+        event.preventDefault();
+        const value = content.querySelector('input').value.trim();
+        if (value) showBrowser(value);
+      });
+      const favoritesSection = content.querySelector('.start-favorites');
+      const favoritesGrid = content.querySelector('.favorites-grid');
+      const renderFavorites = () => {
+        const favorites = getFavorites();
+        favoritesSection.hidden = !favorites.length;
+        favoritesGrid.replaceChildren();
+        for (const favorite of favorites) {
+          const item = document.createElement('div'); item.className = 'favorite-item';
+          const open = document.createElement('button'); open.type = 'button'; open.className = 'favorite-open'; open.title = favorite.url;
+          const symbol = document.createElement('span'); symbol.className = 'favorite-icon'; symbol.innerHTML = icon('browser');
+          try {
+            const favicon = document.createElement('img');
+            favicon.alt = ''; favicon.loading = 'lazy';
+            favicon.addEventListener('load', () => symbol.replaceChildren(favicon));
+            favicon.src = new URL('/favicon.ico', favorite.url).href;
+          } catch { /* Keep the globe for invalid or unavailable icons. */ }
+          const name = document.createElement('span'); name.className = 'favorite-name'; name.textContent = favorite.name;
+          open.append(symbol, name); open.addEventListener('click', () => showBrowser(favorite.url));
+          const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'favorite-remove'; remove.textContent = '×'; remove.title = `Remove ${favorite.name}`; remove.setAttribute('aria-label', remove.title);
+          remove.addEventListener('click', () => { removeFavorite(favorite.url); renderFavorites(); });
+          item.append(open, remove); favoritesGrid.append(item);
+        }
+      };
+      renderFavorites();
     };
     const showPlaceholder = (tool, address = '') => {
       const title = { files: 'Files', terminal: 'Terminal', browser: 'Browser' }[tool];
@@ -107,6 +137,7 @@ class DemoPane {
         preview: params.filesPreview || params.openFile, filePins: params.filePins || [],
         onStateChange: state => savePaneState(api.id, 'files', { filesRoot: state.root, filesPreview: state.preview, filePins: state.filePins, openFile: undefined }),
         onOpenUrl: url => openBrowserLink(url, api.id),
+        onOpenHtml: url => openBrowserLink(url, api.id),
       });
     };
     const showBrowser = (address = '') => {
@@ -115,7 +146,7 @@ class DemoPane {
       api.setTitle('Browser');
       content.classList.add('browser-content');
       content.replaceChildren();
-      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state), switchingSpace);
+      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state));
     };
     const showTerminal = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'terminal' });
@@ -363,7 +394,7 @@ async function handleTerminalFileLink(raw, cwd, terminalId) {
   } catch (error) { console.error('Cannot open file link:', error); window.alert(`Cannot open file: ${error}`); }
 }
 function openBrowserLink(url, sourceId) {
-  if (!/^https?:\/\//i.test(url)) return;
+  if (!/^(?:https?|file):\/\//i.test(url)) return;
   dock.addPanel({ id: `pane-${crypto.randomUUID()}`, component: 'demo', title: 'Browser',
     params: { label: 'Browser', tool: 'browser', address: url },
     ...(dock.getPanel(sourceId) ? { position: { referencePanel: sourceId, direction: 'within' } } : {}) });
