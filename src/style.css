@@ -100,6 +100,7 @@ button:hover { background: #475065; }
 .browser-controls input:focus { border-color: #7284b0; }
 .browser-host { flex: 1; min-height: 0; display: grid; place-items: center; }
 .browser-message { padding: 20px; color: var(--text-muted); text-align: center; }
+.browser-error { padding: 8px 12px; color: #ffb4b4; background: #34242a; overflow-wrap: anywhere; }
 .files-view { padding: 0; gap: 0; }
 .files-header { padding: 8px; border-bottom: 1px solid var(--border-subtle); }
 .files-path { flex: 1; min-width: 0; }
@@ -693,3 +694,48 @@ button:disabled { cursor: default; }
 .extension-details-body { order: 4; flex-basis: 100%; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .extension-details-body p { margin: 8px 0; }
 .extensions-actions:has(.extension-details[open]) { flex-wrap: wrap; }
+
+/* Dockview manages the pane gutter so content is measured at its actual size. */
+#dock { background: var(--surface-app); }
+#dock .dv-groupview {
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+.blue-outline #dock .dv-groupview.dv-active-group::after { border-radius: var(--radius-card); }
+
+/* Spaces and file navigation share the compact control palette. */
+.app-sidebar, .files-sidebar { background: var(--surface-app); }
+.sidebar-brand-mark { border-radius: var(--radius-control); }
+.space-row { border-radius: var(--radius-control); overflow: hidden; }
+.space-row:has(.space-select[aria-current]) { background: var(--surface-selected); border-left-color: var(--focus-ring); }
+.space-select, .space-add-secondary, .files-root, .files-tree-row { border-radius: var(--radius-control); }
+.space-select:hover, .space-add-secondary:hover, .files-root:hover, .files-tree-row:hover { background: var(--surface-hover); }
+.space-search, .files-filter {
+  background: #181d28;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-chip);
+  color: var(--text-primary);
+}
+.space-search { padding: 0 11px; }
+.space-add-secondary { border-color: var(--border-control); border-radius: var(--radius-chip); }
+.sidebar-divider, .files-divider { background: var(--surface-app); }
+.sidebar-divider:hover, .sidebar-divider:focus-visible, .sidebar-divider.dragging,
+.files-divider:hover, .files-divider:focus-visible, .files-divider.dragging { background: #789be2; }
+.files-header { background: var(--surface-card); }
+.files-tree-row.selected { background: var(--surface-selected); border-color: transparent; color: var(--text-primary); }
+.files-refresh, .files-path-cancel { border-radius: var(--radius-control); }
+.files-status, .files-preview-header { border-color: var(--border-subtle); }
+
+/* Limit only the title, leaving tab actions and badges usable. */
+.truncate-tabs .dv-tab .dv-default-tab .dv-default-tab-content {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Keep terminal scrollback available without a permanent empty scrollbar. */
+.terminal-surface .xterm-viewport { scrollbar-width: none; }
+.terminal-surface .xterm-viewport::-webkit-scrollbar { display: none; }

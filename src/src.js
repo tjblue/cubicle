@@ -147,7 +147,7 @@ class DemoPane {
       api.setTitle('Browser');
       content.classList.add('browser-content');
       content.replaceChildren();
-      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state));
+      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state), url => openBrowserLink(url, api.id));
     };
     const showTerminal = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'terminal' });
@@ -306,6 +306,11 @@ class WorkspaceTab extends DefaultTab {
       this.element.title = data.tool === 'terminal' ? 'Double-click to rename terminal; clear the name to follow the terminal title' : (this.api.title || '');
     };
     this.paramSubscription = this.api.onDidParametersChange(this.refresh);
+    this.titleContent = this.element.querySelector('.dv-default-tab-content');
+    this.updateTitleTooltip = () => { if (this.titleContent) this.titleContent.title = this.titleContent.textContent || ''; };
+    this.titleObserver = new MutationObserver(this.updateTitleTooltip);
+    if (this.titleContent) this.titleObserver.observe(this.titleContent, { childList: true, characterData: true, subtree: true });
+    this.updateTitleTooltip();
     this.rename = (event) => {
       if (this.api.getParameters().tool !== 'terminal' || event.target.closest('button')) return;
       event.preventDefault(); event.stopPropagation();
@@ -326,12 +331,13 @@ class WorkspaceTab extends DefaultTab {
     this.element.removeEventListener('click', this.clearAttention);
     window.removeEventListener('terminal-attention-change', this.updateAttention);
     this.paramSubscription?.dispose();
+    this.titleObserver?.disconnect();
     super.dispose();
   }
 }
 
 const dock = createDockview(document.getElementById('dock'), {
-  theme: themeDark,
+  theme: { ...themeDark, gap: 4 },
   createComponent: () => new DemoPane(),
   defaultTabComponent: 'workspace-tab',
   createTabComponent: () => new WorkspaceTab(),
@@ -706,28 +712,30 @@ initializeSpaces();
 
 
 
-const appearanceDefaults = { chrome: 'integrated', softTabs: true, blueOutline: true, compactCards: true };
+const appearanceDefaults = { chrome: 'integrated', softTabs: true, blueOutline: true, compactCards: true, truncateTabs: false };
 let appearance = { ...appearanceDefaults };
 try {
   const saved = JSON.parse(localStorage.getItem('cubicle-pane-appearance-v2') || '{}');
   if (saved.chrome === 'two-row' || saved.chrome === 'integrated') appearance.chrome = saved.chrome;
-  for (const key of ['softTabs', 'blueOutline', 'compactCards']) {
+  for (const key of ['softTabs', 'blueOutline', 'compactCards', 'truncateTabs']) {
     if (typeof saved[key] === 'boolean') appearance[key] = saved[key];
   }
 } catch { /* Use defaults if preferences are unavailable. */ }
 const appearanceControls = {
   chrome: document.getElementById('pane-chrome'),
   softTabs: document.getElementById('soft-tabs'),
+  truncateTabs: document.getElementById('truncate-tabs'),
   blueOutline: document.getElementById('blue-outline'),
   compactCards: document.getElementById('compact-cards'),
 };
 function applyAppearance() {
   document.body.classList.toggle('chrome-integrated', appearance.chrome === 'integrated');
   document.body.classList.toggle('soft-tabs', appearance.softTabs);
+  document.body.classList.toggle('truncate-tabs', appearance.truncateTabs);
   document.body.classList.toggle('blue-outline', appearance.blueOutline);
   document.body.classList.toggle('compact-cards', appearance.compactCards);
   appearanceControls.chrome.value = appearance.chrome;
-  for (const key of ['softTabs', 'blueOutline', 'compactCards']) appearanceControls[key].checked = appearance[key];
+  for (const key of ['softTabs', 'blueOutline', 'compactCards', 'truncateTabs']) appearanceControls[key].checked = appearance[key];
   try { localStorage.setItem('cubicle-pane-appearance-v2', JSON.stringify(appearance)); } catch { /* Preferences remain usable for this session. */ }
 }
 for (const [key, control] of Object.entries(appearanceControls)) {

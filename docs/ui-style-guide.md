@@ -12,3 +12,5 @@ Cubicle uses a compact, quiet dark interface. Reuse the shared tokens at the top
 - Reuse existing components and selectors before adding variants. Scope styles to the component when a global change could affect pane toolbars, menus, editors, or third-party widgets. Check Settings, dialogs, and narrow widths when changing shared controls.
 
 Keep editor canvases, structural split lines, and docked pane edges square where rounding would interfere with layout. Preserve semantic colors for warnings, destructive actions, and space identities.
+
+Workspace pane groups use a 4px gutter and the card radius. Keep resize handles usable and preserve the measured content area for embedded browser views. Spaces and file navigation use the same selected surface, rounded rows, and compact search fields.

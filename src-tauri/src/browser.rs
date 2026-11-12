@@ -34,8 +34,18 @@ pub async fn browser_create(app: AppHandle, id: String, url: String) -> Result<(
     let parsed = web_url(&url)?;
     let nav_app = app.clone(); let nav_id = id.clone();
     let title_app = app.clone(); let title_id = id.clone();
+    let popup_app = app.clone(); let popup_id = id.clone();
     let builder = WebviewBuilder::new(label(&id), WebviewUrl::External(parsed))
         .use_https_scheme(true)
+        .zoom_hotkeys_enabled(true)
+        .on_new_window(move |url, _| {
+            let (kind, value) = match web_url(url.as_str()) {
+                Ok(url) => ("new-tab", url.to_string()),
+                Err(_) => ("error", format!("Cannot open popup address: {url}")),
+            };
+            let _ = popup_app.emit_to("main", "browser-event", BrowserEvent { id: popup_id.clone(), kind, value });
+            tauri::webview::NewWindowResponse::Deny
+        })
         .initialization_script(r#"(() => {
           let last = '';
           const report = () => {
@@ -58,6 +68,8 @@ pub async fn browser_create(app: AppHandle, id: String, url: String) -> Result<(
     let window = app.get_window("main").ok_or("Main window not found")?;
     let view = window.add_child(builder, PhysicalPosition::new(0, 0), PhysicalSize::new(1u32, 1u32)).map_err(|e| e.to_string())?;
     view.hide().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    navigation_runtime::attach(&view, app.clone(), id.clone())?;
     // On Linux Tauri puts child webviews into a GtkBox, which ignores their
     // requested bounds. Use an overlay so each browser can occupy its pane.
     #[cfg(target_os = "linux")]
@@ -109,13 +121,73 @@ pub fn browser_navigate(app: AppHandle, id: String, url: String) -> Result<(), S
 }
 #[tauri::command]
 pub fn browser_action(app: AppHandle, id: String, action: String) -> Result<(), String> {
+    #[cfg(windows)]
+    { return navigation_runtime::action(&app.get_webview(&label(&id)).ok_or("Browser not found")?, action); }
+    #[cfg(not(windows))]
+    {
     let script = match action.as_str() { "back" => "history.back()", "forward" => "history.forward()", "reload" => "location.reload()", _ => return Err("Unknown action".into()) };
     app.get_webview(&label(&id)).ok_or("Browser not found")?.eval(script).map_err(|e| e.to_string())
+    }
 }
 #[tauri::command]
 pub fn browser_close(app: AppHandle, id: String) -> Result<(), String> {
     if let Some(view) = app.get_webview(&label(&id)) { view.close().map_err(|e| e.to_string())?; }
     Ok(())
+}
+
+#[cfg(windows)]
+mod navigation_runtime {
+    use super::*;
+    use webview2_com::{take_pwstr, SourceChangedEventHandler, HistoryChangedEventHandler};
+    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2, ICoreWebView2Settings3};
+    use windows::core::{BOOL, PWSTR, Interface};
+
+    unsafe fn report(core: &ICoreWebView2, app: &AppHandle, id: &str) -> windows::core::Result<()> {
+        let mut source = PWSTR::null();
+        core.Source(&mut source)?;
+        let _ = app.emit_to("main", "browser-event", BrowserEvent { id: id.into(), kind: "url", value: take_pwstr(source) });
+        let mut back = BOOL(0); let mut forward = BOOL(0);
+        core.CanGoBack(&mut back)?; core.CanGoForward(&mut forward)?;
+        let value = serde_json::json!({ "back": back.as_bool(), "forward": forward.as_bool() }).to_string();
+        let _ = app.emit_to("main", "browser-event", BrowserEvent { id: id.into(), kind: "history", value });
+        Ok(())
+    }
+
+    pub fn attach(view: &tauri::Webview, app: AppHandle, id: String) -> Result<(), String> {
+        view.with_webview(move |platform| unsafe {
+            let result = (|| -> windows::core::Result<()> {
+                let core = platform.controller().CoreWebView2()?;
+                let settings = core.Settings()?;
+                settings.SetIsStatusBarEnabled(true)?;
+                settings.cast::<ICoreWebView2Settings3>()?.SetAreBrowserAcceleratorKeysEnabled(true)?;
+                let a = app.clone(); let i = id.clone();
+                let source = SourceChangedEventHandler::create(Box::new(move |core, _| {
+                    if let Some(core) = core { report(&core, &a, &i)?; } Ok(())
+                }));
+                let a = app.clone(); let i = id.clone();
+                let history = HistoryChangedEventHandler::create(Box::new(move |core, _| {
+                    if let Some(core) = core { report(&core, &a, &i)?; } Ok(())
+                }));
+                let mut token = 0;
+                core.add_SourceChanged(&source, &mut token)?;
+                core.add_HistoryChanged(&history, &mut token)?;
+                report(&core, &app, &id)
+            })();
+            if let Err(error) = result { let _ = app.emit_to("main", "browser-event", BrowserEvent { id, kind: "error", value: error.to_string() }); }
+        }).map_err(|e| e.to_string())
+    }
+
+    pub fn action(view: &tauri::Webview, action: String) -> Result<(), String> {
+        if !matches!(action.as_str(), "back" | "forward" | "reload" | "stop") { return Err("Unknown action".into()); }
+        let app = view.app_handle().clone();
+        let id = view.label().trim_start_matches("browser-").to_string();
+        view.with_webview(move |platform| unsafe {
+            let result = platform.controller().CoreWebView2().and_then(|core| match action.as_str() {
+                "back" => core.GoBack(), "forward" => core.GoForward(), "stop" => core.Stop(), _ => core.Reload(),
+            });
+            if let Err(error) = result { let _ = app.emit_to("main", "browser-event", BrowserEvent { id, kind: "error", value: error.to_string() }); }
+        }).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(windows)]
