@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captureTerminalDirectory } from '../src/terminal-directory-capture.js';
+import { captureTerminalDirectory, terminalDirectoryFromOsc, terminalDirectoryFromNotification } from '../src/terminal-directory-capture.js';
+
+test('decodes directory reports without dropping Windows share hosts', () => {
+  assert.equal(terminalDirectoryFromOsc('file:///C:/Jane%20Doe/project', true), 'C:/Jane Doe/project');
+  assert.equal(terminalDirectoryFromOsc('file://server/share/a%23b', true), '\\\\server\\share\\a#b');
+  assert.equal(terminalDirectoryFromOsc('file://workstation/home/user', false), '/home/user');
+  assert.equal(terminalDirectoryFromOsc('https://example.com/project'), null);
+  assert.equal(terminalDirectoryFromOsc('file:///bad%ZZ'), null);
+});
+
+test('cmd directory reports preserve literal percent and hash characters', () => {
+  assert.equal(terminalDirectoryFromNotification('9;C:\\work\\100% #1'), 'C:\\work\\100% #1');
+  assert.equal(terminalDirectoryFromNotification('9;"\\\\server\\share\\docs"'), '\\\\server\\share\\docs');
+  assert.equal(terminalDirectoryFromNotification('4;1;50'), null);
+  assert.equal(terminalDirectoryFromNotification('9;relative'), null);
+});
 
 test('captures the current shell folder at shutdown, independently for each pane', async () => {
   const saved = [];

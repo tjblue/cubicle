@@ -23,7 +23,7 @@ test('failed startup closes its runtime; restart keeps settings without replayin
   const module = new vm.SourceTextModule(source, { context });
   const exportsByModule = {
     '@tauri-apps/api/core': { Channel, invoke, isTauri: () => true }, '@xterm/xterm': { Terminal }, '@xterm/addon-fit': { FitAddon: class { fit() {} } },
-    './terminal-links.js': { findFileLinks: () => [] }, './terminal-directory-capture.js': { captureTerminalDirectory: async () => {} }, './terminal-attention.js': { listenForTerminalAttention: () => () => {} }, '@xterm/xterm/css/xterm.css': {},
+    './terminal-links.js': { findFileLinks: () => [] }, './terminal-directory-capture.js': { captureTerminalDirectory: async () => {}, terminalDirectoryFromOsc: () => null, terminalDirectoryFromNotification: () => null }, './terminal-attention.js': { listenForTerminalAttention: () => () => {} }, '@xterm/xterm/css/xterm.css': {},
   };
   await module.link(specifier => { const values = exportsByModule[specifier]; return new vm.SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value); }, { context }); });
   await module.evaluate();

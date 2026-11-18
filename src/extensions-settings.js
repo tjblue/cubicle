@@ -10,6 +10,19 @@ let edgePath = null;
 let busy = false;
 let installedItems = [];
 let supported = true;
+const busyControls = new Map();
+
+function setDisabled(control, disabled) {
+  if (busy) busyControls.set(control, disabled);
+  control.disabled = busy || disabled;
+}
+function lockControls() {
+  if (!busy) return;
+  for (const control of byId('settings-extensions').querySelectorAll('button, input')) {
+    if (!busyControls.has(control)) busyControls.set(control, control.disabled);
+    control.disabled = true;
+  }
+}
 
 function button(label, action) {
   const element = document.createElement('button');
@@ -32,14 +45,20 @@ function row(item) {
 async function run(action) {
   if (busy) return;
   busy = true; byId('settings-extensions').setAttribute('aria-busy', 'true'); status.textContent = '';
+  lockControls();
   try { await action(); } catch (error) { status.textContent = String(error); }
-  finally { busy = false; byId('settings-extensions').removeAttribute('aria-busy'); }
+  finally {
+    busy = false;
+    for (const [control, disabled] of busyControls) control.disabled = disabled;
+    busyControls.clear();
+    byId('settings-extensions').removeAttribute('aria-busy');
+  }
 }
 async function refresh() {
   const result = await invoke('extensions_list');
   installed.replaceChildren();
-  byId('extensions-import-edge').disabled = !result.supported;
-  byId('extensions-import-folder').disabled = !result.supported;
+  setDisabled(byId('extensions-import-edge'), !result.supported);
+  setDisabled(byId('extensions-import-folder'), !result.supported);
   supported = result.supported; installedItems = result.items;
   if (!result.supported) { note(installed, 'Browser extensions are currently available on Windows.'); return; }
   if (result.runtime_error) status.textContent = `Browser status unavailable: ${result.runtime_error}`;
@@ -61,7 +80,17 @@ function renderInstalled() {
     const toggle = document.createElement('input'); toggle.type = 'checkbox'; toggle.checked = item.runtime_enabled ?? item.enabled;
     toggle.disabled = item.runtime_enabled == null || item.runtime_missing;
     toggle.setAttribute('aria-label', `Enable ${item.name}`);
-    toggle.addEventListener('change', () => run(async () => { try { await invoke('extensions_set_enabled', { id: item.id, enabled: toggle.checked }); await refresh(); } catch (error) { toggle.checked = !toggle.checked; throw error; } }));
+    toggle.addEventListener('change', () => {
+      if (busy) { toggle.checked = item.runtime_enabled ?? item.enabled; return; }
+      const enabled = toggle.checked;
+      return run(async () => {
+        try {
+          await invoke('extensions_set_enabled', { id: item.id, enabled });
+          item.runtime_enabled = item.enabled = enabled;
+          await refresh();
+        } catch (error) { toggle.checked = item.runtime_enabled ?? item.enabled; throw error; }
+      });
+    });
     const details = document.createElement('details'); details.className = 'extension-details';
     const summary = document.createElement('summary'); summary.textContent = 'Details';
     const body = document.createElement('div'); body.className = 'extension-details-body';
@@ -70,13 +99,14 @@ function renderInstalled() {
     actions.append(toggle);
     installed.append(element);
   }
+  lockControls();
 }
 async function importPath(path, source, known) {
   const item = known || await invoke('extensions_inspect', { path });
   const permissions = item.permissions?.length ? item.permissions.join(', ') : 'None listed';
-  if (await chooseAction({ title: 'Install extension?', message: `${item.name || 'This extension'} requests: ${permissions}`, choices: [{ label: 'Cancel', value: 'cancel' }, { label: 'Install', value: 'install' }] }) !== 'install') return;
+  if (await chooseAction({ title: 'Import extension?', message: `${item.name || 'This extension'} requests: ${permissions}. An existing extension with the same ID will be updated.`, choices: [{ label: 'Cancel', value: 'cancel' }, { label: 'Import', value: 'install' }] }) !== 'install') return;
   await invoke('extensions_import', { path, source });
-  await refresh(); status.textContent = `${item.name || 'Extension'} installed.`;
+  await refresh(); status.textContent = `${item.name || 'Extension'} imported.`;
 }
 async function discover(path) {
   discovery.hidden = false; candidates.replaceChildren();
@@ -89,11 +119,12 @@ async function discover(path) {
     actions.append(button('Import', () => run(() => importPath(item.path, 'edge', item))));
     candidates.append(element);
   }
+  lockControls();
 }
 byId('extensions-search').addEventListener('input', renderInstalled);
 byId('extensions-refresh').addEventListener('click', () => run(refresh));
 byId('extensions-import-edge').addEventListener('click', () => run(() => discover(null)));
-byId('extensions-other-profile').addEventListener('click', () => run(async () => { const path = await invoke('extensions_choose_folder'); if (path) await discover(path); }));
+byId('extensions-other-profile').addEventListener('click', () => run(async () => { const path = await invoke('extensions_choose_folder', { title: 'Choose an Edge profile or Extensions folder' }); if (path) await discover(path); }));
 byId('extensions-import-folder').addEventListener('click', () => run(async () => { const path = await invoke('extensions_choose_folder'); if (path) await importPath(path, 'folder'); }));
 window.addEventListener('settings-visibility', () => { if (!byId('settings-page').hidden && isTauri()) run(refresh); });
 if (!isTauri()) { byId('extensions-import-edge').disabled = true; byId('extensions-import-folder').disabled = true; byId('extensions-refresh').disabled = true; note(installed, 'Open the desktop app to manage browser extensions.'); }

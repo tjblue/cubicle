@@ -1,23 +1,31 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;
-mod browser_downloads;
-mod browser_privacy;
 mod extensions;
+mod terminal_shell;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
-use std::{collections::HashMap, io::{Read, Write}, sync::Mutex, thread};
+use std::{collections::HashMap, io::{Read, Write}, sync::{Arc, Mutex}, thread};
 use tauri::{ipc::Channel, Emitter, Manager, State};
 
 struct Session {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: TerminalWriter,
     child: Box<dyn Child + Send + Sync>,
 }
 
 #[derive(Default)]
 struct Terminals(Mutex<HashMap<String, Session>>);
+
+type TerminalWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
+async fn write_terminal_input(writer: TerminalWriter, data: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = writer.lock().map_err(|e| e.to_string())?;
+        writer.write_all(data.as_bytes()).map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())?
+}
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
@@ -39,9 +47,11 @@ fn terminal_start(app: tauri::AppHandle, terminals: State<'_, Terminals>, id: St
     let default_shell = String::from("powershell.exe");
     #[cfg(not(windows))]
     let default_shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    let mut command = CommandBuilder::new(shell.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(&default_shell));
+    let selected_shell = shell.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or(&default_shell);
+    let mut command = CommandBuilder::new(selected_shell);
     command.env("TERM", "xterm-256color");
     if let Some(env) = env { for (key, value) in env { command.env(key, value); } }
+    terminal_shell::configure(&mut command, selected_shell);
     if let Some(path) = cwd {
         let validated = validate_directory(path)?;
         command.cwd(display_windows_path(&validated));
@@ -50,7 +60,7 @@ fn terminal_start(app: tauri::AppHandle, terminals: State<'_, Terminals>, id: St
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().map_err(|e| { let _ = child.kill(); e.to_string() })?;
     let writer = pair.master.take_writer().map_err(|e| { let _ = child.kill(); e.to_string() })?;
-    sessions.insert(id.clone(), Session { master: pair.master, writer, child });
+    sessions.insert(id.clone(), Session { master: pair.master, writer: Arc::new(Mutex::new(writer)), child });
     drop(sessions);
     thread::spawn(move || {
         let mut buffer = [0; 8192];
@@ -69,10 +79,14 @@ fn terminal_start(app: tauri::AppHandle, terminals: State<'_, Terminals>, id: St
 }
 
 #[tauri::command]
-fn terminal_write(terminals: State<'_, Terminals>, id: String, data: String) -> Result<(), String> {
-    let mut sessions = terminals.0.lock().map_err(|e| e.to_string())?;
-    let session = sessions.get_mut(&id).ok_or("Terminal is not running")?;
-    session.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())
+async fn terminal_write(terminals: State<'_, Terminals>, id: String, data: String) -> Result<(), String> {
+    let writer = {
+        let sessions = terminals.0.lock().map_err(|e| e.to_string())?;
+        Arc::clone(&sessions.get(&id).ok_or("Terminal is not running")?.writer)
+    };
+    // A full PTY input buffer must not block the UI or hold the registry lock
+    // needed to resize, close, or write to another terminal.
+    write_terminal_input(writer, data).await
 }
 
 #[tauri::command]
@@ -122,6 +136,26 @@ fn terminal_resize(terminals: State<'_, Terminals>, id: String, cols: u16, rows:
 fn terminal_close(terminals: State<'_, Terminals>, id: String) -> Result<(), String> {
     if let Some(mut session) = terminals.0.lock().map_err(|e| e.to_string())?.remove(&id) { let _ = session.child.kill(); }
     Ok(())
+}
+
+#[tauri::command]
+fn terminal_close_all(terminals: State<'_, Terminals>) -> Result<(), String> {
+    let pending = {
+        let mut sessions = terminals.0.lock().map_err(|e| e.to_string())?;
+        std::mem::take(&mut *sessions)
+    };
+    let mut errors = Vec::new();
+    for (id, mut session) in pending {
+        if let Err(error) = session.child.kill() {
+            // An already exited shell is harmless. Keep a still-running session
+            // registered so a failed cleanup can be retried.
+            if !matches!(session.child.try_wait(), Ok(Some(_))) {
+                errors.push(format!("{id}: {error}"));
+                terminals.0.lock().map_err(|e| e.to_string())?.insert(id, session);
+            }
+        }
+    }
+    if errors.is_empty() { Ok(()) } else { Err(format!("Could not close terminal sessions: {}", errors.join("; "))) }
 }
 
 // PowerShell displays verbatim Windows paths as provider-qualified paths.
@@ -418,8 +452,7 @@ fn main() {
             tauri::http::Response::builder().status(204).header("Access-Control-Allow-Origin", "*").body(Vec::new()).unwrap()
         })
         .manage(Terminals::default())
-        .manage(browser_downloads::Downloads::default())
-        .invoke_handler(tauri::generate_handler![restart_app, browser_downloads::browser_downloads_list, browser_downloads::browser_download_reveal, browser_downloads::browser_download_action, browser_privacy::browser_permissions_list, browser_privacy::browser_permission_reset, browser_privacy::browser_data_clear, extensions::extensions_list, extensions::extensions_inspect, extensions::extensions_choose_folder, extensions::extensions_discover_edge, extensions::extensions_import, extensions::extensions_set_enabled, extensions::extensions_remove, close_to_tray_enabled, terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_file_url, browser::browser_set_popup_mode, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
+        .invoke_handler(tauri::generate_handler![restart_app, extensions::extensions_list, extensions::extensions_inspect, extensions::extensions_choose_folder, extensions::extensions_discover_edge, extensions::extensions_import, extensions::extensions_set_enabled, extensions::extensions_remove, close_to_tray_enabled, terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_close_all, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_file_url, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close, browser::browser_close_all])
         .build(tauri::generate_context!())
         .expect("failed to build Cubicle")
         .run(|app, event| {
@@ -593,12 +626,35 @@ fn preview_image(path: String) -> Result<ImagePreview, String> {
 
 #[tauri::command]
 fn save_markdown(path: String, original: String, content: String) -> Result<(), String> {
-    let target = std::path::Path::new(&path);
-    let extension = target.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    save_markdown_with(std::path::Path::new(&path), &original, |file| file.write_all(content.as_bytes()))
+}
+
+fn save_markdown_with(
+    path: &std::path::Path,
+    original: &str,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     if !matches!(extension.as_str(), "md" | "markdown" | "mdown") { return Err("Only Markdown files can be saved here".into()); }
-    let current = std::fs::read_to_string(target).map_err(|e| e.to_string())?;
+    // Resolve links first so replacing the file preserves a symlink used to open it.
+    let target = path.canonicalize().map_err(|e| e.to_string())?;
+    let metadata = std::fs::metadata(&target).map_err(|e| e.to_string())?;
+    if !metadata.is_file() { return Err("This is not a regular file".into()); }
+    if metadata.permissions().readonly() { return Err("The file is read-only".into()); }
+    let current = std::fs::read_to_string(&target).map_err(|e| e.to_string())?;
     if current != original { return Err("The file changed on disk. Reopen it before saving to avoid overwriting those changes.".into()); }
-    std::fs::write(target, content).map_err(|e| e.to_string())
+
+    let parent = target.parent().ok_or("Invalid file path")?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| format!("Cannot prepare file save: {e}"))?;
+    write(temp.as_file_mut()).map_err(|e| format!("Cannot write file: {e}"))?;
+    temp.as_file().set_permissions(metadata.permissions()).map_err(|e| format!("Cannot preserve file permissions: {e}"))?;
+    temp.as_file().sync_all().map_err(|e| format!("Cannot finish file save: {e}"))?;
+
+    // Writing the temporary file may take time; recheck before committing it.
+    let current = std::fs::read_to_string(&target).map_err(|e| e.to_string())?;
+    if current != original { return Err("The file changed on disk. Reopen it before saving to avoid overwriting those changes.".into()); }
+    temp.persist(&target).map_err(|e| format!("Cannot replace file: {}", e.error))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -640,6 +696,52 @@ mod file_workflow_tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "# After\n");
         std::fs::remove_file(file).unwrap();
         std::fs::remove_dir(folder).unwrap();
+    }
+
+    #[test]
+    fn a_partial_write_failure_preserves_the_original_and_removes_the_temp_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("sample.md");
+        std::fs::write(&path, "# Original\n").unwrap();
+        let result = save_markdown_with(&path, "# Original\n", |file| {
+            file.write_all(b"# Partial")?;
+            Err(std::io::Error::new(std::io::ErrorKind::Other, "simulated write failure"))
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Original\n");
+        assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_change_during_save_is_not_overwritten() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("sample.md");
+        std::fs::write(&path, "# Original\n").unwrap();
+        let result = save_markdown_with(&path, "# Original\n", |file| {
+            file.write_all(b"# Cubicle edit\n")?;
+            std::fs::write(&path, "# External edit\n")
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# External edit\n");
+        assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_preserves_symlinks_and_file_permissions() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("sample.md");
+        let link = folder.path().join("linked.md");
+        std::fs::write(&path, "# Original\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        symlink(&path, &link).unwrap();
+
+        save_markdown(link.to_string_lossy().into_owned(), "# Original\n".into(), "# Updated\n".into()).unwrap();
+
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Updated\n");
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
     }
 }
 
@@ -706,3 +808,64 @@ mod hook_config_tests {
 
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) { app.restart(); }
+
+#[cfg(test)]
+mod terminal_input_tests {
+    use super::*;
+    use std::{future::Future, sync::mpsc, task::{Context, Poll, Wake, Waker}, time::Duration};
+
+    struct BlockingWriter {
+        started: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl Write for BlockingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let _ = self.started.send(());
+            self.release.recv_timeout(Duration::from_secs(5))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::TimedOut, e))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+
+    struct ReportingWriter(mpsc::Sender<Vec<u8>>);
+    impl Write for ReportingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+
+    struct NoopWake;
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    #[test]
+    fn a_blocked_input_yields_and_does_not_block_another_terminal() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer: TerminalWriter = Arc::new(Mutex::new(Box::new(BlockingWriter {
+            started: started_tx, release: release_rx,
+        })));
+        let mut blocked = Box::pin(write_terminal_input(writer, "blocked".into()));
+        let waker = Waker::from(Arc::new(NoopWake));
+        let yielded = matches!(blocked.as_mut().poll(&mut Context::from_waker(&waker)), Poll::Pending);
+        let started = started_rx.recv_timeout(Duration::from_secs(2));
+
+        let (bytes_tx, bytes_rx) = mpsc::channel();
+        let other_writer: TerminalWriter = Arc::new(Mutex::new(Box::new(ReportingWriter(bytes_tx))));
+        let other = tauri::async_runtime::spawn(write_terminal_input(other_writer, "other".into()));
+        let bytes = bytes_rx.recv_timeout(Duration::from_secs(2));
+        // Always release the worker before asserting, including on failure.
+        let _ = release_tx.send(());
+        if yielded { tauri::async_runtime::block_on(blocked).unwrap(); }
+        tauri::async_runtime::block_on(other).unwrap().unwrap();
+
+        assert!(yielded, "polling terminal input must not block the caller");
+        assert!(started.is_ok(), "the blocking writer did not start");
+        assert_eq!(bytes.unwrap(), b"other");
+    }
+}

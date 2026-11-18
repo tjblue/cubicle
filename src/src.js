@@ -1,5 +1,4 @@
-import { icon } from './icons.js';
-import { readWorkspace, writeWorkspace, confirmQuitChanges } from './workspace-safety.js';
+import { readWorkspace, writeWorkspace, confirmQuitChanges, updateSpaceFileRoots } from './workspace-safety.js';
 import { chooseAction } from './confirm-dialog.js';
 import { parseProfile } from './profiles.js';
 import { createDockview, themeDark, DefaultTab } from 'dockview';
@@ -10,14 +9,24 @@ import { mountFiles, hasFiles, closeFiles, setFilesRoot, openFileInPane, filePan
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
-import { browserControls, closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
-import { mountBrowserPrivacy } from './browser-privacy.js';
+import { browserControls, closeBrowser, closeBrowsersForReload, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
 import { getFavorites, removeFavorite } from './browser-favorites.js';
-import { captureTerminalDirectories, closeTerminal, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
+import { captureTerminalDirectories, closeTerminal, closeTerminalsForReload, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
+
+const icons = {
+  files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/>',
+  browser: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4"/>',
+  back: '<path d="m14 6-6 6 6 6"/>',
+};
+function icon(name) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[name]}</svg>`;
+}
 
 const splitActions = [
-  ['Split right', 'right', 'splitRight'],
-  ['Split down', 'below', 'splitDown'],
+  ['Split right', 'right', '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M16.5 9v6M13.5 12h6"/>'],
+  ['Split down', 'below', '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M12 14v4M10 16h4"/>'],
 ];
 function makeSplitButton(label, direction, paths, referencePanel) {
   const button = document.createElement('button');
@@ -25,7 +34,7 @@ function makeSplitButton(label, direction, paths, referencePanel) {
   button.className = 'pane-action';
   button.title = label;
   button.setAttribute('aria-label', label);
-  button.innerHTML = icon(paths);
+  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
   button.addEventListener('pointerdown', (event) => event.stopPropagation());
   button.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -34,18 +43,6 @@ function makeSplitButton(label, direction, paths, referencePanel) {
   });
   return button;
 }
-
-
-for (const [selector, name] of [
-  ['#sidebar-toggle', 'sidebar'], ['#space-search-toggle', 'search'],
-  ['#spaces-menu-toggle', 'more'], ['#space-add', 'plus'],
-  ['#settings-close', 'close'], ['#space-dialog-close', 'close'],
-]) {
-  const button = document.querySelector(selector);
-  if (button) button.innerHTML = icon(name);
-}
-const notificationIcon = document.querySelector('#space-notifications svg');
-if (notificationIcon) notificationIcon.outerHTML = icon('bell');
 
 const pendingProfileCommands = new Map();
 const attentionPanes = new Map();
@@ -66,7 +63,7 @@ class DemoPane {
     }
     const bell = document.createElement('button');
     bell.type = 'button'; bell.className = 'pane-action terminal-attention-toggle';
-    bell.innerHTML = icon('bell');
+    bell.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-2.5 7-2.5 8.5h17C20.5 15 18 15 18 8ZM10 20h4"/></svg>';
     const refreshBell = () => { const enabled = !!api.getParameters().attentionEnabled; bell.hidden = api.getParameters().tool !== 'terminal'; bell.classList.toggle('enabled', enabled); bell.setAttribute('aria-pressed', String(enabled)); bell.setAttribute('aria-label', enabled ? 'Disable terminal attention alerts' : 'Enable terminal attention alerts'); bell.title = enabled ? 'Terminal attention alerts on' : 'Terminal attention alerts off'; };
     bell.onclick = () => { api.updateParameters({ ...api.getParameters(), attentionEnabled: !api.getParameters().attentionEnabled }); refreshBell(); if (!api.getParameters().attentionEnabled) clearAttention(api.id); window.dispatchEvent(new Event('space-content-change')); };
     toolbar.append(bell);
@@ -135,9 +132,10 @@ class DemoPane {
     const showFiles = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'files' });
       refreshBell();
-      api.setTitle('Files');
+      api.setTitle(params.profileTitle || 'Files');
       content.replaceChildren();
-      mountFiles(api.id, content, showStart, params.filesRoot || params.profileRoot || currentSpacePath(), params.profilePins || [], {
+      const filesRoot = params.filesRoot !== undefined ? params.filesRoot : params.profileRoot || currentSpacePath();
+      mountFiles(api.id, content, showStart, filesRoot, params.profilePins || [], {
         preview: params.filesPreview || params.openFile, filePins: params.filePins || [],
         onStateChange: state => savePaneState(api.id, 'files', { filesRoot: state.root, filesPreview: state.preview, filePins: state.filePins, openFile: undefined }),
         onOpenUrl: url => openBrowserLink(url, api.id),
@@ -150,10 +148,7 @@ class DemoPane {
       api.setTitle('Browser');
       content.classList.add('browser-content');
       content.replaceChildren();
-      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state), url => openBrowserLink(url, api.id), action => {
-        if (action === 'new-tab') add('within', api.id);
-        if (action === 'close-tab' && dock.getPanel(api.id)?.api === api) api.close();
-      });
+      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state), url => openBrowserLink(url, api.id));
     };
     const showTerminal = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'terminal' });
@@ -165,7 +160,7 @@ class DemoPane {
       pendingProfileCommands.delete(api.id);
       mountTerminal(api.id, content, api.getParameters().terminalCwd || params.agentSession?.cwd || params.profileCwd || currentSpacePath(), (title) => {
         if (!api.getParameters().terminalName) api.setTitle(title || 'Terminal');
-      }, (path, cwd) => void handleTerminalFileLink(path, cwd, api.id), { shell: params.profileShell, env: params.profileEnv, command: startupCommand, savedCwd: !!(api.getParameters().terminalCwd || params.agentSession?.cwd), fallbackCwd: params.profileCwd || currentSpacePath(), onCwdChange: cwd => saveTerminalCwd(api.id, cwd), onAttention: kind => receiveAttention(api.id, kind) });
+      }, (path, cwd) => void handleTerminalFileLink(path, cwd, api.id), { shell: params.profileShell, env: params.profileEnv, command: startupCommand, savedCwd: !!(api.getParameters().terminalCwd || params.agentSession?.cwd), fallbackCwd: params.profileCwd || currentSpacePath(), onCwdChange: cwd => saveTerminalCwd(api.id, cwd), onAttention: kind => receiveAttention(api.id, kind), onInput: () => clearAttention(api.id) });
       content.addEventListener('pointerdown', () => clearAttention(api.id));
     };
     if (hasTerminal(api.id) || params.tool === 'terminal') showTerminal(); else if (hasBrowser(api.id) || params.tool === 'browser') showBrowser(params.address || ''); else if (hasFiles(api.id) || params.tool === 'files') showFiles(); else showStart();
@@ -193,7 +188,12 @@ terminalCloseDialog.addEventListener('close', () => {
 
 const tabGroupColors = ['#89a8f8', '#80d6bb', '#e6b37a', '#d29ce2', '#ef9095', '#8fc5da'];
 let tabGroupMenu;
-function closeTabGroupMenu() { tabGroupMenu?.remove(); tabGroupMenu = null; }
+function closeTabGroupMenu() {
+  if (!tabGroupMenu) return;
+  tabGroupMenu.remove(); tabGroupMenu = null;
+  document.body.classList.remove('tab-group-menu-open');
+  window.dispatchEvent(new Event('tab-group-menu-visibility'));
+}
 function setTabGroup(panel, group) {
   panel.api.updateParameters({ ...panel.api.getParameters(), tabGroup: group || undefined });
   window.dispatchEvent(new Event('space-content-change'));
@@ -249,6 +249,8 @@ function showTabGroupMenu(event, api) {
     });
   }
   document.body.append(menu);
+  document.body.classList.add('tab-group-menu-open');
+  window.dispatchEvent(new Event('tab-group-menu-visibility'));
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - rect.width))}px`;
   menu.style.top = `${Math.max(0, Math.min(event.clientY, innerHeight - rect.height))}px`;
@@ -287,7 +289,7 @@ class WorkspaceTab extends DefaultTab {
     this.groupBadge.className = 'tab-group-badge';
     this.element.prepend(this.groupBadge, this.favicon);
     this.bell = document.createElement('button'); this.bell.type = 'button'; this.bell.className = 'pane-action terminal-attention-toggle tab-bell';
-    this.bell.innerHTML = icon('bell');
+    this.bell.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-2.5 7-2.5 8.5h17C20.5 15 18 15 18 8ZM10 20h4"/></svg>';
     this.bell.addEventListener('pointerdown', event => event.stopPropagation());
     this.bell.addEventListener('click', event => { event.stopPropagation(); const enabled = !this.api.getParameters().attentionEnabled; this.api.updateParameters({ ...this.api.getParameters(), attentionEnabled: enabled }); if (!enabled) clearAttention(this.api.id); window.dispatchEvent(new Event('space-content-change')); });
     this.element.append(this.bell);
@@ -363,7 +365,7 @@ const dock = createDockview(document.getElementById('dock'), {
     button.className = 'new-tab-button';
     button.title = 'New tab';
     button.setAttribute('aria-label', 'New tab');
-    button.innerHTML = icon('plus');
+    button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
     const onPointerDown = (event) => event.stopPropagation();
     const onClick = (event) => {
       event.stopPropagation();
@@ -471,7 +473,7 @@ function persistSpaces() {
   if (!workspaceSaveWarning) { workspaceSaveWarning = true; alert('Could not save the workspace. Changes may be lost when Cubicle closes. Check available storage and try again.'); } return false;
 }
 function saveActiveSpace() {
-  if (switchingSpace || workspaceStorageLocked) return false;
+  if (switchingSpace) return false;
   const space = spaces.find(item => item.id === activeSpaceId);
   if (space) { space.layout = dock.toJSON(); return persistSpaces(); }
   return false;
@@ -527,8 +529,8 @@ function renderSpaces() {
   for (const space of visible) {
     const row = document.createElement('div'); row.className = 'space-row';
     const select = document.createElement('button'); select.type = 'button'; select.className = 'space-select';
-    const folderContainer = document.createElement('span'); folderContainer.innerHTML = icon('files');
-    const folder = folderContainer.firstElementChild; folder.classList.add('space-folder'); folder.style.color = currentSpaceColor(space);
+    const folder = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); folder.setAttribute('viewBox', '0 0 24 24'); folder.setAttribute('fill', 'none'); folder.setAttribute('stroke', 'currentColor'); folder.setAttribute('stroke-width', '1.7'); folder.setAttribute('aria-hidden', 'true'); folder.classList.add('space-folder');
+    const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path'); shape.setAttribute('d', 'M3 5.5h6l2 2h10v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'); folder.append(shape); folder.style.color = currentSpaceColor(space);
     const labels = document.createElement('span'); labels.className = 'space-label'; const name = document.createElement('span'); name.className = 'space-name'; name.textContent = space.name; labels.append(name);
     if (showSpacePaths) { const path = document.createElement('span'); path.className = 'space-path'; path.textContent = displaySpacePath(space.path) || 'Home folder'; labels.append(path); }
     select.append(folder, labels); select.title = `${space.name} — ${displaySpacePath(space.path) || 'Home folder'}`;
@@ -545,8 +547,7 @@ function renderSpaces() {
 function switchSpace(id) {
   if (id === activeSpaceId) return;
   clearTimeout(saveTimer); saveActiveSpace();
-  const oldSpace = spaces.find(item => item.id === activeSpaceId);
-  for (const panelId of panelIds(oldSpace?.layout)) retainedPanels.add(panelId);
+  for (const panel of dock.panels) retainedPanels.add(panel.id);
   activeSpaceId = id;
   const space = spaces.find(item => item.id === id);
   space.lastOpened = Date.now();
@@ -664,10 +665,10 @@ spaceForm.addEventListener('submit', async event => {
       const space = editingSpace, pathChanged = (space.path || null) !== validated;
       Object.assign(space, { name, path: validated, color: draftSpaceColor });
       if (pathChanged) {
-        const ids = space.id === activeSpaceId ? dock.panels.map(panel => panel.id) : panelIds(space.layout);
-        for (const id of ids) setFilesRoot(id, validated);
+        updateSpaceFileRoots(space, validated, { panels: space.id === activeSpaceId ? dock.panels : null, hasFiles, setFilesRoot });
       }
-      persistSpaces(); closeSpaceDialog(); renderSpaces();
+      if (space.id === activeSpaceId) saveActiveSpace(); else persistSpaces();
+      closeSpaceDialog(); renderSpaces();
     } else {
       const space = { id: crypto.randomUUID(), name, path: validated, color: draftSpaceColor, layout: null };
       spaces.push(space); spaceSearch.value = ''; closeSpaceDialog(); switchSpace(space.id);
@@ -871,13 +872,6 @@ sidebarDivider.addEventListener('keydown', (event) => {
 
 // Settings overlays the workspace without destroying its panes or sessions.
 const settingsPage = document.getElementById('settings-page');
-const browserPrivacyLink = document.createElement('a');
-browserPrivacyLink.href = '#settings-browser-privacy'; browserPrivacyLink.textContent = 'Browser privacy';
-settingsPage.querySelector('.settings-nav').append(browserPrivacyLink);
-const browserPrivacySection = document.createElement('section');
-browserPrivacySection.id = 'settings-browser-privacy'; browserPrivacySection.tabIndex = -1;
-settingsPage.querySelector('.settings-content').append(browserPrivacySection);
-const browserPrivacy = mountBrowserPrivacy(browserPrivacySection);
 const settingsClose = document.getElementById('settings-close');
 let settingsOpener = null;
 function openSettings(section, opener) {
@@ -914,7 +908,6 @@ function showSettingsSection(id) {
   const sections = settingsPage.querySelectorAll('.settings-content > section');
   if (![...sections].some(section => section.id === id)) id = 'settings-app';
   sections.forEach(section => { section.hidden = section.id !== id; });
-  if (id === 'settings-browser-privacy') void browserPrivacy.refresh();
   settingsPage.querySelectorAll('.settings-nav a').forEach(link => {
     if (link.hash === `#${id}`) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
@@ -941,7 +934,13 @@ const profileSelect = document.getElementById('profile-select'), profileJson = d
 let profiles = [], profileIndex = 0, profileDirty = false;
 try { const saved = JSON.parse(localStorage.getItem('cubicle-launch-profiles-v1') || '[]'); if (Array.isArray(saved)) profiles = saved.filter(p => { try { parseProfile(p); return true; } catch { return false; } }); } catch { /* Use a default. */ }
 if (!profiles.length) profiles = [{ name: 'My profile', panes: ['terminal', 'files'] }];
-function persistProfiles() { try { localStorage.setItem('cubicle-launch-profiles-v1', JSON.stringify(profiles)); return true; } catch { profileStatus.textContent = 'Could not save profiles to local storage.'; return false; } }
+function persistProfiles(nextProfiles = profiles) { try { localStorage.setItem('cubicle-launch-profiles-v1', JSON.stringify(nextProfiles)); return true; } catch { profileStatus.textContent = 'Could not save profiles to local storage. Your current profile and edits have been kept.'; return false; } }
+function commitProfiles(nextProfiles, nextIndex) {
+  if (!persistProfiles(nextProfiles)) return false;
+  profiles = nextProfiles; profileIndex = nextIndex;
+  renderProfiles();
+  return true;
+}
 function renderProfilePreview() {
   const preview = document.getElementById('profile-preview');
   const error = document.getElementById('profile-preview-error');
@@ -968,18 +967,18 @@ profileSelect.onchange = () => { if (profileDirty && !confirm('Discard unsaved p
 profileJson.oninput = () => { profileDirty = true; profileStatus.textContent = 'Unsaved changes'; renderProfilePreview(); };
 function saveProfileEdits() {
   try {
-    const previous = profiles[profileIndex];
-    profiles[profileIndex] = parseProfile(profileJson.value).source;
-    if (!persistProfiles()) { profiles[profileIndex] = previous; return false; }
-    renderProfiles(); profileStatus.textContent = 'Profile saved.'; return true;
+    const nextProfiles = [...profiles];
+    nextProfiles[profileIndex] = parseProfile(profileJson.value).source;
+    if (!commitProfiles(nextProfiles, profileIndex)) return false;
+    profileStatus.textContent = 'Profile saved.'; return true;
   } catch (e) { profileStatus.textContent = `Cannot save: ${e.message}`; return false; }
 }
 document.getElementById('profile-save').onclick = saveProfileEdits;
-document.getElementById('profile-new').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; profiles.push({ name: 'New profile', panes: ['terminal'] }); profileIndex = profiles.length - 1; persistProfiles(); renderProfiles(); };
-document.getElementById('profile-duplicate').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; const copy = structuredClone(profiles[profileIndex]); copy.name += ' copy'; profiles.push(copy); profileIndex = profiles.length - 1; persistProfiles(); renderProfiles(); };
-document.getElementById('profile-delete').onclick = () => { if (!confirm('Delete this profile? Existing spaces are not affected.')) return; profiles.splice(profileIndex, 1); if (!profiles.length) profiles.push({ name: 'New profile', panes: ['terminal'] }); profileIndex = 0; persistProfiles(); renderProfiles(); };
+document.getElementById('profile-new').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; commitProfiles([...profiles, { name: 'New profile', panes: ['terminal'] }], profiles.length); };
+document.getElementById('profile-duplicate').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; const copy = structuredClone(profiles[profileIndex]); copy.name += ' copy'; commitProfiles([...profiles, copy], profiles.length); };
+document.getElementById('profile-delete').onclick = () => { if (!confirm('Delete this profile? Existing spaces are not affected.')) return; const nextProfiles = profiles.filter((_, index) => index !== profileIndex); if (!nextProfiles.length) nextProfiles.push({ name: 'New profile', panes: ['terminal'] }); commitProfiles(nextProfiles, 0); };
 document.getElementById('profile-import').onclick = () => document.getElementById('profile-file').click();
-document.getElementById('profile-file').onchange = async event => { const f = event.target.files[0]; if (!f) return; try { const p = parseProfile(await f.text()).source; if (profileDirty && !confirm('Discard unsaved profile edits?')) return; profiles.push(p); profileIndex = profiles.length - 1; persistProfiles(); renderProfiles(); profileStatus.textContent = 'Profile imported.'; } catch (e) { profileStatus.textContent = `Cannot import: ${e.message}`; } finally { event.target.value = ''; } };
+document.getElementById('profile-file').onchange = async event => { const f = event.target.files[0]; if (!f) return; try { const p = parseProfile(await f.text()).source; if (profileDirty && !confirm('Discard unsaved profile edits?')) return; if (commitProfiles([...profiles, p], profiles.length)) profileStatus.textContent = 'Profile imported.'; } catch (e) { profileStatus.textContent = `Cannot import: ${e.message}`; } finally { event.target.value = ''; } };
 document.getElementById('profile-export').onclick = () => { if (profileDirty) { profileStatus.textContent = 'Save changes before exporting.'; return; } const p = profiles[profileIndex], a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })); a.download = `${p.name.replace(/[^a-z0-9_-]+/gi, '-') || 'profile'}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
 async function launchProfile() {
   if (profileDirty) { profileStatus.textContent = 'Save changes before launching.'; return; }
@@ -997,7 +996,7 @@ async function launchProfile() {
     let groupAnchor = null, active = null;
     group.tabs.forEach((tab, index) => {
       const id = `pane-${crypto.randomUUID()}`, path = value => value?.replaceAll('${workspace}', root || '') || null;
-      const params = { label: tab.title || tab.type, tool: tab.type, terminalName: tab.type === 'terminal' ? tab.title : undefined, address: tab.url, profileCwd: path(tab.cwd), profileShell: tab.shell, profileEnv: tab.env, profileRoot: path(tab.root), profilePins: tab.pins?.map(pin => ({ ...pin, path: path(pin.path) })), profileFavorites: tab.favorites, openFile: path(tab.reveal) };
+      const params = { label: tab.title || tab.type, tool: tab.type, terminalName: tab.type === 'terminal' ? tab.title : undefined, profileTitle: tab.type === 'files' ? tab.title : undefined, address: tab.url, profileCwd: path(tab.cwd), profileShell: tab.shell, profileEnv: tab.env, profileRoot: path(tab.root), profilePins: tab.pins?.map(pin => ({ ...pin, path: path(pin.path) })), profileFavorites: tab.favorites, openFile: path(tab.reveal) };
       const referencePanel = groupAnchor || anchor;
       if (tab.command) pendingProfileCommands.set(id, tab.command);
       const panel = dock.addPanel({ id, component: 'demo', title: tab.title || tab.type, params, ...(referencePanel ? { position: { referencePanel, direction: groupAnchor ? 'within' : profile.direction === 'column' ? 'below' : 'right' } } : {}) });
@@ -1020,8 +1019,23 @@ async function recoverApp(restart = false) {
   if (result !== 'proceed') { if (result !== 'cancel') alert('Some changes could not be saved. Review them before continuing.'); return; }
   await captureTerminalDirectories();
   if (!workspaceStorageLocked && !saveActiveSpace()) return;
-  if (restart && isTauri()) await invoke('restart_app');
-  else location.reload();
+  let restoreBrowsers;
+  try {
+    if (restart && isTauri()) await invoke('restart_app');
+    else {
+      // Native child webviews outlive a reload of the main interface.
+      if (isTauri()) {
+        restoreBrowsers = await closeBrowsersForReload();
+        await closeTerminalsForReload();
+      }
+      location.reload();
+    }
+  } catch (error) {
+    let message = `Could not ${action}: ${error}`;
+    try { await restoreBrowsers?.(); }
+    catch (restoreError) { message += ` Browser panes could not be restored: ${restoreError}`; }
+    alert(message);
+  }
 }
 document.getElementById('app-reload').onclick = () => void recoverApp();
 document.getElementById('app-restart').onclick = () => void recoverApp(true);

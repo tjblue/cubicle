@@ -4,6 +4,7 @@ import { gfm } from '@milkdown/kit/preset/gfm';
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
 import { getMarkdown, $remark } from '@milkdown/kit/utils';
 import { sanitizeMarkdownTree } from './markdown-safety.js';
+import { createMarkdownImageView } from './markdown-images.js';
 
 const safePreview = $remark('safePreview', () => () => sanitizeMarkdownTree);
 
@@ -12,7 +13,14 @@ export async function createMarkdownEditor(parent, markdown, onChange, options =
   const editor = await Editor.make().config(ctx => {
     ctx.set(rootCtx, parent);
     ctx.set(defaultValueCtx, markdown);
-    if (options.readOnly) ctx.update(editorViewOptionsCtx, value => ({ ...value, editable: () => false }));
+    ctx.update(editorViewOptionsCtx, value => ({
+      ...value,
+      ...(options.readOnly ? { editable: () => false } : {}),
+      nodeViews: {
+        ...value.nodeViews,
+        image: node => createMarkdownImageView(node, { loadLocalImage: options.loadLocalImage }),
+      },
+    }));
     ctx.get(listenerCtx).markdownUpdated((_ctx, value) => { if (ready) onChange(value); });
   }).use(commonmark).use(gfm).use(listener).use(options.readOnly ? safePreview : []).create();
   ready = true;
