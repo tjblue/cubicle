@@ -97,5 +97,5 @@ export function mountDownloads(controls, element) {
   panels.add(panel); render(panel);
   button.addEventListener('click', () => { panel.hidden = !panel.hidden; button.setAttribute('aria-expanded', String(!panel.hidden)); });
   init().catch(error => { list.textContent = `Downloads unavailable: ${error}`; });
-  return () => panels.delete(panel);
+  return () => { panels.delete(panel); button.remove(); panel.remove(); };
 }

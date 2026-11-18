@@ -5,17 +5,18 @@ import vm from 'node:vm';
 
 test('browser routes popup events to the current pane callback, updates history, and ignores closed panes', async () => {
   let receive;
-  const calls = [], opened = [];
+  const calls = [], opened = [], shortcuts = [];
+  let downloadsMounted = 0, downloadsDisposed = 0;
   class Element {
-    constructor() { this.nodes = new Map(); this.listeners = {}; this.isConnected = true; }
+    constructor() { this.nodes = new Map(); this.listeners = {}; this.dataset = {}; this.isConnected = true; }
     querySelector(key) { if (!this.nodes.has(key)) this.nodes.set(key, new Element()); return this.nodes.get(key); }
     querySelectorAll() { return []; }
-    append(child) { this.child = child; } insertBefore() {} setAttribute() {} focus() {}
+    append(child) { this.child = child; } insertBefore() {} setAttribute() {} focus() {} select() {}
     addEventListener(key, callback) { this.listeners[key] = callback; }
     getBoundingClientRect() { return { left: 0, top: 0, width: 100, height: 100 }; }
     getClientRects() { return [1]; }
   }
-  const context = vm.createContext({ URL, console, setInterval() {}, requestAnimationFrame: cb => cb(),
+  const context = vm.createContext({ URL, console, crypto: { randomUUID: () => 'uuid' }, setInterval() {}, requestAnimationFrame: cb => cb(),
     ResizeObserver: class { observe() {} disconnect() {} },
     window: { addEventListener() {}, devicePixelRatio: 1 },
     document: { createElement: () => new Element(), addEventListener() {}, visibilityState: 'visible', querySelector: () => null, body: { classList: { contains: () => false } } },
@@ -25,6 +26,9 @@ test('browser routes popup events to the current pane callback, updates history,
     '@tauri-apps/api/core': { isTauri: () => true, invoke: async (...args) => calls.push(args) },
     '@tauri-apps/api/event': { listen: async (_, callback) => { receive = callback; } },
     './browser-favorites.js': { getFavorites: () => [], setFavorite() {}, removeFavorite() {} },
+    './browser-downloads.js': { mountDownloads: () => { downloadsMounted++; return () => downloadsDisposed++; } },
+    './browser-downloads.css': {},
+    './browser-icons.js': { browserIcons: { back: '', forward: '', reload: '', stop: '', favorite: '', popup: '' } },
   };
   await module.link(name => new vm.SyntheticModule(Object.keys(imports[name]), function () {
     for (const [key, value] of Object.entries(imports[name])) this.setExport(key, value);
@@ -32,20 +36,26 @@ test('browser routes popup events to the current pane callback, updates history,
   await module.evaluate();
   const api = { setTitle() {}, isVisible: true };
   const container = new Element();
-  module.namespace.mountBrowser('one', container, api, '', [], undefined, url => opened.push(url));
-  receive({ payload: { id: 'one', kind: 'new-tab', value: 'https://example.com/' } });
+  module.namespace.mountBrowser('one', container, api, '', [], undefined, url => opened.push(url), action => shortcuts.push(action));
+  assert.equal(downloadsMounted, 1);
+  receive({ payload: { id: 'one-uuid', kind: 'loading', value: 'true' } });
+  assert.equal(container.child.querySelector('[data-action="reload"], [data-action="stop"]').dataset.action, 'stop');
+  receive({ payload: { id: 'one-uuid', kind: 'shortcut', value: 'new-tab' } });
+  assert.deepEqual(shortcuts, ['new-tab']);
+  receive({ payload: { id: 'one-uuid', kind: 'new-tab', value: 'https://example.com/' } });
   assert.deepEqual(opened, ['https://example.com/']);
-  receive({ payload: { id: 'one', kind: 'history', value: '{"back":true,"forward":false}' } });
+  receive({ payload: { id: 'one-uuid', kind: 'history', value: '{"back":true,"forward":false}' } });
   assert.equal(container.child.querySelector('[data-action="back"]').disabled, false);
   assert.equal(container.child.querySelector('[data-action="forward"]').disabled, true);
-  receive({ payload: { id: 'one', kind: 'url', value: 'https://example.com/#route' } });
+  receive({ payload: { id: 'one-uuid', kind: 'url', value: 'https://example.com/#route' } });
   assert.equal(container.child.querySelector('input').value, 'https://example.com/#route');
-  receive({ payload: { id: 'one', kind: 'history', value: 'invalid' } });
+  receive({ payload: { id: 'one-uuid', kind: 'history', value: 'invalid' } });
   module.namespace.mountBrowser('one', new Element(), api, '', [], undefined, url => opened.push(`new:${url}`));
-  receive({ payload: { id: 'one', kind: 'new-tab', value: 'https://example.org/' } });
+  receive({ payload: { id: 'one-uuid', kind: 'new-tab', value: 'https://example.org/' } });
   assert.equal(opened[1], 'new:https://example.org/');
   module.namespace.closeBrowser('one');
-  receive({ payload: { id: 'one', kind: 'new-tab', value: 'https://ignored.test/' } });
+  assert.equal(downloadsDisposed, 1);
+  receive({ payload: { id: 'one-uuid', kind: 'new-tab', value: 'https://ignored.test/' } });
   assert.equal(opened.length, 2);
 });
 
@@ -65,7 +75,7 @@ async function reloadHarness(intercept = () => undefined) {
     getClientRects() { return [1]; }
   }
   const context = vm.createContext({
-    URL, console, setInterval() {}, requestAnimationFrame: callback => callback(),
+    URL, console, crypto: { randomUUID: () => 'uuid' }, setInterval() {}, requestAnimationFrame: callback => callback(),
     ResizeObserver: class { observe(host) { observed.push(host); } disconnect() {} },
     window: { addEventListener() {}, devicePixelRatio: 1 },
     document: { createElement: () => new Element(), addEventListener() {}, visibilityState: 'visible',
@@ -78,6 +88,9 @@ async function reloadHarness(intercept = () => undefined) {
     },
     '@tauri-apps/api/event': { listen: async (_, callback) => { receive = callback; } },
     './browser-favorites.js': { getFavorites: () => [], setFavorite() {}, removeFavorite() {} },
+    './browser-downloads.js': { mountDownloads: () => () => {} },
+    './browser-downloads.css': {},
+    './browser-icons.js': { browserIcons: { back: '', forward: '', reload: '', stop: '', favorite: '', popup: '' } },
   };
   const module = new vm.SourceTextModule(await readFile(new URL('../src/browser.js', import.meta.url), 'utf8'), { context });
   await module.link(name => new vm.SyntheticModule(Object.keys(imports[name]), function () {
@@ -87,7 +100,7 @@ async function reloadHarness(intercept = () => undefined) {
   const api = { isVisible: true, setTitle() {} };
   return {
     browser: module.namespace, calls, observed, opened,
-    event: (id, kind, value) => receive({ payload: { id, kind, value } }),
+    event: (id, kind, value) => receive({ payload: { id: `${id}-uuid`, kind, value } }),
     mount(id, url = '') {
       const container = new Element();
       module.namespace.mountBrowser(id, container, api, url, [], undefined, value => opened.push(value));
@@ -141,7 +154,7 @@ test('rollback waits for pending creation and does not revive a pane closed duri
   const requested = deferred(), finished = deferred();
   let heldCreation = false;
   const ui = await reloadHarness((name, args) => {
-    if (name === 'browser_create' && args.id === 'pending' && !heldCreation) {
+    if (name === 'browser_create' && args.id.startsWith('pending-') && !heldCreation) {
       heldCreation = true;
       requested.resolve();
       return finished.promise;
@@ -159,8 +172,8 @@ test('rollback waits for pending creation and does not revive a pane closed duri
   await restore();
   assert.equal(ui.browser.hasBrowser('pending'), true);
   assert.equal(ui.browser.hasBrowser('removed'), false);
-  assert.equal(ui.calls.filter(([name, args]) => name === 'browser_create' && args.id === 'pending').length, 2);
-  assert.equal(ui.calls.filter(([name, args]) => name === 'browser_create' && args.id === 'removed').length, 1);
+  assert.equal(ui.calls.filter(([name, args]) => name === 'browser_create' && args.id.startsWith('pending-')).length, 2);
+  assert.equal(ui.calls.filter(([name, args]) => name === 'browser_create' && args.id.startsWith('removed-')).length, 1);
 });
 
 test('failed browser recreation is reported and leaves the pane available for retry', async () => {

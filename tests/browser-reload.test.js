@@ -25,7 +25,7 @@ class Element {
 test('reload cleanup waits for pending browser creation before closing all native views', async () => {
   const creationRequested = deferred(), creationFinished = deferred(), calls = [];
   const context = vm.createContext({
-    URL, console, setInterval() {}, requestAnimationFrame: callback => callback(),
+    URL, console, crypto: { randomUUID: () => 'uuid' }, setInterval() {}, requestAnimationFrame: callback => callback(),
     ResizeObserver: class { observe() {} disconnect() {} },
     window: { addEventListener() {}, devicePixelRatio: 1 },
     document: {
@@ -43,6 +43,9 @@ test('reload cleanup waits for pending browser creation before closing all nativ
     },
     '@tauri-apps/api/event': { listen: async () => {} },
     './browser-favorites.js': { getFavorites: () => [], setFavorite() {}, removeFavorite() {} },
+    './browser-downloads.js': { mountDownloads: () => () => {} },
+    './browser-downloads.css': {},
+    './browser-icons.js': { browserIcons: { back: '', forward: '', reload: '', stop: '', favorite: '', popup: '' } },
   };
   const module = new vm.SourceTextModule(await readFile(new URL('../src/browser.js', import.meta.url), 'utf8'), { context });
   await module.link(name => new vm.SyntheticModule(Object.keys(imports[name]), function () {

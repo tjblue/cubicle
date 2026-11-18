@@ -28,17 +28,9 @@ Typing also acknowledges terminal attention badges.
 
 ## Validation
 
-All **79 JavaScript tests pass**. They exercise the repaired paths using actual modules/functions with mocked DOM/native services, including delayed startup/navigation, unsaved edits, failed saves and cleanup, redirect timing, asynchronous image disposal, and busy extension controls. Run them in this environment with:
+On Windows, the combined branch passes all **80 JavaScript tests** (`npm test`), all **26 Rust tests** (`cargo test --manifest-path src-tauri/Cargo.toml --offline`), and the frontend production build (`npm run build`). Browser integration coverage checks download-panel mounting and cleanup, loading controls, shortcut routing, address edits, and reload recovery.
 
-```powershell
-node --experimental-vm-modules --test --test-isolation=none tests/*.test.js
-```
-
-JavaScript syntax checks passed. The standard worker-based test invocation is restricted by this environment, so the suite runs in one process.
-
-Rust unit tests were added for shell setup, extension replacement/rollback, folder cleanup boundaries, and Edge profile discovery. Direct Windows PowerShell/cmd probes verified directory reporting and preservation of custom prompt/exit status.
-
-**Remaining validation:** Rust compilation/tests and a live Tauri/WebView2 pass have not run because Rust tooling is unavailable. The frontend production build is also blocked because Vite dependencies are unavailable and package installation could not complete. Native extension replacement, desktop image rendering, terminal reload cleanup, and overlay visibility require desktop verification before release.
+The browser download manager, privacy settings, native popup compatibility mode, and keyboard shortcuts from master are retained alongside the repairs. A live Tauri/WebView2 pass remains necessary to verify native extension replacement, popup behavior, download tracking, privacy controls, image rendering, terminal reload cleanup, and overlay visibility.
 
 If reload is cancelled after native browser cleanup, restored browser panes reopen their last URLs. Page history and unsaved webpage form state cannot be restored after the native view has closed.
 

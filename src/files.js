@@ -1,3 +1,4 @@
+import { icon } from './icons.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { searchFileTree } from './files-search.js';
 import { createTextPreview } from './text-preview.js';
@@ -6,7 +7,7 @@ import { chooseAction } from './confirm-dialog.js';
 import { assignHeadingIds } from './markdown-safety.js';
 
 const sessions = new Map();
-const folderSvg = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M2.5 5.25A1.75 1.75 0 0 1 4.25 3.5h4.1c.5 0 .97.21 1.3.59l.85.91h5.25a1.75 1.75 0 0 1 1.75 1.75v7.5A1.75 1.75 0 0 1 15.75 16h-11.5a1.75 1.75 0 0 1-1.75-1.75v-9Z"/></svg>';
+const folderSvg = icon('files');
 
 // Keep the file icon in the same column as folder icons at every tree depth.
 function fileIcon(name, directory) {
@@ -132,8 +133,8 @@ export function mountFiles(id, container, onBack, initialPath = null, pins = [],
         if (node.directory) row.setAttribute('aria-expanded', String(expanded.has(node.path)));
         for (const level of guides) { const line = document.createElement('span'); line.className = 'files-guide'; line.style.left = `${12 + level * 15}px`; row.append(line); }
         const chevron = document.createElement('span'); chevron.className = 'files-chevron'; chevron.setAttribute('aria-hidden', 'true');
-        if (node.directory) chevron.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>';
-        const glyph = document.createElement('span'); const icon = fileIcon(node.name, node.directory); glyph.className = `files-glyph files-glyph-${icon.kind}`; if (node.directory) glyph.innerHTML = folderSvg; else glyph.textContent = icon.label; glyph.setAttribute('aria-hidden', 'true');
+        if (node.directory) chevron.innerHTML = icon('chevronRight');
+        const glyph = document.createElement('span'); const glyphIcon = fileIcon(node.name, node.directory); glyph.className = `files-glyph files-glyph-${glyphIcon.kind}`; if (node.directory) glyph.innerHTML = folderSvg; else glyph.textContent = glyphIcon.label; glyph.setAttribute('aria-hidden', 'true');
         const name = document.createElement('span'); name.className = 'files-name'; name.textContent = node.name;
         row.append(chevron, glyph, name); row.onclick = () => node.directory ? toggle(node) : openFile(node); tree.append(row);
         if (node.directory && node.children && (expanded.has(node.path) || query)) draw(node.children, depth + 1, [...guides, depth]);

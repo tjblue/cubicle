@@ -56,6 +56,7 @@ async function createFiles(choose, { slowPath = '/slow', filePins = [], entries 
       },
     },
     './files-search.js': { searchFileTree() {} },
+    './icons.js': { icon: () => '' },
     './text-preview.js': { createTextPreview() {} },
     './markdown-editor.js': {
       createMarkdownEditor: async (_parent, text, onChange, options) => {

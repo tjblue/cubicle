@@ -8,8 +8,9 @@ test('download updates beat a stale initial snapshot and cancel targets the sele
   const calls = [];
   class Element {
     constructor() { this.children = []; this.attributes = {}; this.listeners = {}; this.hidden = false; }
-    append(...children) { this.children.push(...children); }
-    insertBefore(child) { this.children.push(child); }
+    append(...children) { for (const child of children) child.parent = this; this.children.push(...children); }
+    insertBefore(child) { child.parent = this; this.children.push(child); }
+    remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
     replaceChildren() { this.children = []; }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, callback) { this.listeners[name] = callback; }
@@ -55,4 +56,6 @@ test('download updates beat a stale initial snapshot and cancel targets the sele
   await completed.children.find(child => child.textContent === 'Show in folder').listeners.click();
   assert.equal(calls.at(-1)[0], 'browser_download_reveal');
   dispose();
+  assert.equal(controls.children.length, 0);
+  assert.equal(view.querySelector('.browser-downloads'), null);
 });

@@ -24,7 +24,7 @@ async function browserHarness() {
     querySelector: () => null, body: { classList: { contains: name => classes.has(name) } },
   };
   const context = vm.createContext({
-    URL, console, setInterval() {}, requestAnimationFrame: callback => callback(),
+    URL, console, crypto: { randomUUID: () => 'uuid' }, setInterval() {}, requestAnimationFrame: callback => callback(),
     ResizeObserver: class { observe() {} disconnect() {} },
     window: { addEventListener(name, callback) { events[name] = callback; }, devicePixelRatio: 1 },
     document,
@@ -34,6 +34,9 @@ async function browserHarness() {
     '@tauri-apps/api/core': { isTauri: () => true, invoke: async (...args) => { calls.push(args); } },
     '@tauri-apps/api/event': { listen: async (_, callback) => { receive = callback; } },
     './browser-favorites.js': { getFavorites: () => [], setFavorite() {}, removeFavorite() {} },
+    './browser-downloads.js': { mountDownloads: () => () => {} },
+    './browser-downloads.css': {},
+    './browser-icons.js': { browserIcons: { back: '', forward: '', reload: '', stop: '', favorite: '', popup: '' } },
   };
   await module.link(name => new vm.SyntheticModule(Object.keys(imports[name]), function () {
     for (const [key, value] of Object.entries(imports[name])) this.setExport(key, value);
@@ -46,7 +49,7 @@ async function browserHarness() {
   document.activeElement = input;
   return {
     input, form: container.child.querySelector('form'), calls, classes, events,
-    url: value => receive({ payload: { id: 'one', kind: 'url', value } }),
+    url: value => receive({ payload: { id: 'one-uuid', kind: 'url', value } }),
   };
 }
 
