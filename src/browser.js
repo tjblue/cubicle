@@ -1,20 +1,40 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getFavorites, setFavorite, removeFavorite } from './browser-favorites.js';
+import { mountDownloads } from './browser-downloads.js';
+import './browser-downloads.css';
+import { browserIcons } from './browser-icons.js';
 
 const sessions = new Map();
+const runtimeSessions = new Map();
 const eventsReady = isTauri() ? listen('browser-event', ({ payload }) => {
-  const session = sessions.get(payload.id);
+  const session = runtimeSessions.get(payload.id);
   if (!session || session.closed) return;
   if (payload.kind === 'new-tab') session.onOpenUrl?.(payload.value);
+  if (payload.kind === 'shortcut') {
+    if (payload.value === 'address') { session.input.focus(); session.input.select(); }
+    else session.onShortcut?.(payload.value);
+  }
   if (payload.kind === 'error') showError(session, payload.value);
+  if (payload.kind === 'loading') {
+    const button = session.element.querySelector('[data-action="reload"], [data-action="stop"]');
+    const loading = payload.value === 'true';
+    button.dataset.action = loading ? 'stop' : 'reload';
+    button.innerHTML = loading ? browserIcons.stop : browserIcons.reload;
+    button.title = loading ? 'Stop loading' : 'Reload';
+    button.setAttribute('aria-label', button.title);
+  }
   if (payload.kind === 'history') {
     try {
       const state = JSON.parse(payload.value);
       for (const action of ['back', 'forward']) session.element.querySelector(`[data-action="${action}"]`).disabled = !state[action];
     } catch {}
   }
-  if (payload.kind === 'url') { session.url = payload.value; let favicon = ''; try { favicon = new URL('/favicon.ico', payload.value).href; } catch {} session.onStateChange?.({ address: payload.value, favicon }); if (document.activeElement !== session.input) session.input.value = payload.value; session.refreshFavorite(); }
+  if (payload.kind === 'url') {
+    // The native view starts at about:blank while its event handlers are attached.
+    if (!session.url && payload.value === 'about:blank') return;
+    session.url = payload.value; let favicon = ''; try { favicon = new URL('/favicon.ico', payload.value).href; } catch {} session.onStateChange?.({ address: payload.value, favicon }); if (document.activeElement !== session.input) session.input.value = payload.value; session.refreshFavorite();
+  }
   if (payload.kind === 'favicon') session.onStateChange?.({ favicon: payload.value });
   if (payload.kind === 'title') { session.title = payload.value || 'Browser'; session.api.setTitle(session.title); }
 }) : Promise.resolve();
@@ -28,12 +48,12 @@ function address(value) {
 }
 export function browserControls(disabled = false) {
   const inactive = disabled ? ' disabled' : '';
-  return `<div class="browser-controls"><button type="button" data-action="back" title="Back" aria-label="Back"${inactive}>←</button><button type="button" data-action="forward" title="Forward" aria-label="Forward"${inactive}>→</button><button type="button" data-action="reload" title="Reload" aria-label="Reload"${inactive}>⟳</button><form role="search"><input aria-label="Search or enter address" placeholder="Search or enter address" spellcheck="false" autocomplete="off"></form></div>`;
+  return `<div class="browser-controls"><button type="button" data-action="back" title="Back" aria-label="Back"${inactive}>${browserIcons.back}</button><button type="button" data-action="forward" title="Forward" aria-label="Forward"${inactive}>${browserIcons.forward}</button><button type="button" data-action="reload" title="Reload" aria-label="Reload"${inactive}>${browserIcons.reload}</button><form role="search"><input aria-label="Search or enter address" placeholder="Search or enter address" spellcheck="false" autocomplete="off"></form></div>`;
 }
 export function hasBrowser(id) { return sessions.has(id); }
-export function mountBrowser(id, container, api, initial = '', favorites = [], onStateChange, onOpenUrl) {
+export function mountBrowser(id, container, api, initial = '', favorites = [], onStateChange, onOpenUrl, onShortcut) {
   let s = sessions.get(id);
-  if (s) { container.append(s.element); s.api = api; s.onStateChange = onStateChange; s.onOpenUrl = onOpenUrl; api.setTitle(s.title); sync(s); return; }
+  if (s) { container.append(s.element); s.api = api; s.onStateChange = onStateChange; s.onOpenUrl = onOpenUrl; s.onShortcut = onShortcut; api.setTitle(s.title); sync(s); return; }
   const element = document.createElement('div');
   element.className = 'browser-view';
   element.innerHTML = `${browserControls()}<div class="browser-host"><div class="browser-message">Search or enter an address to start browsing.</div></div>`;
@@ -46,17 +66,40 @@ export function mountBrowser(id, container, api, initial = '', favorites = [], o
   element.querySelector('.browser-controls').append(favoriteButton);
   if (favorites.length) { const links = document.createElement('div'); links.className = 'profile-links'; for (const favorite of favorites) { const button = document.createElement('button'); button.type = 'button'; button.textContent = favorite.name; button.title = favorite.url; button.addEventListener('click', () => navigate(s, favorite.url)); links.append(button); } element.insertBefore(links, element.querySelector('.browser-host')); }
   container.append(element);
-  s = { id, api, onStateChange, element, input: element.querySelector('input'), host: element.querySelector('.browser-host'), message: element.querySelector('.browser-message'), title: 'Browser', closed: false, created: false, ready: Promise.resolve(), position: Promise.resolve(), key: '' };
+  s = { id, runtimeId: `${id}-${crypto.randomUUID()}`, api, onStateChange, element, input: element.querySelector('input'), host: element.querySelector('.browser-host'), message: element.querySelector('.browser-message'), title: 'Browser', closed: false, created: false, ready: Promise.resolve(), position: Promise.resolve(), key: '' };
   s.refreshFavorite = () => {
     const saved = getFavorites().some(item => item.url === s.url);
-    favoriteButton.textContent = saved ? '★' : '☆';
+    favoriteButton.innerHTML = browserIcons.favorite;
     favoriteButton.disabled = !/^https?:\/\//i.test(s.url || '');
     favoriteButton.title = favoriteButton.disabled ? 'Open a page to add a favorite' : saved ? 'Remove favorite' : 'Add favorite';
     favoriteButton.setAttribute('aria-label', favoriteButton.title);
     favoriteButton.setAttribute('aria-pressed', String(saved));
   };
   s.onOpenUrl = onOpenUrl;
+  s.onShortcut = onShortcut;
   s.errorMessage = errorMessage;
+  s.disposeDownloads = mountDownloads(element.querySelector('.browser-controls'), element);
+  const popupButton = document.createElement('button');
+  popupButton.type = 'button'; popupButton.className = 'browser-popup-mode'; popupButton.innerHTML = browserIcons.popup;
+  popupButton.disabled = true;
+  popupButton.title = 'Open new windows in separate windows';
+  popupButton.setAttribute('aria-label', popupButton.title); popupButton.setAttribute('aria-pressed', 'false');
+  element.querySelector('.browser-controls').append(popupButton);
+  popupButton.addEventListener('click', async () => {
+    if (!s.created || s.closed) return;
+    popupButton.disabled = true;
+    const native = !s.nativePopups;
+    try {
+      await s.ready;
+      if (!s.created || s.closed) return;
+      await invoke('browser_set_popup_mode', { id: s.runtimeId, native });
+      s.nativePopups = native;
+      popupButton.setAttribute('aria-pressed', String(native));
+      popupButton.title = native ? 'New windows open separately; click to open links in tabs' : 'Open new windows in separate windows';
+      popupButton.setAttribute('aria-label', popupButton.title);
+    } catch (error) { showError(s, error); }
+    finally { popupButton.disabled = false; }
+  });
   favoriteButton.addEventListener('click', () => {
     if (!s.url) return;
     if (getFavorites().some(item => item.url === s.url)) removeFavorite(s.url);
@@ -65,29 +108,41 @@ export function mountBrowser(id, container, api, initial = '', favorites = [], o
   });
   s.refreshFavorite();
   sessions.set(id, s);
+  runtimeSessions.set(s.runtimeId, s);
   s.observer = new ResizeObserver(() => sync(s)); s.observer.observe(s.host);
   element.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); navigate(s, s.input.value); });
-  element.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => { if (s.created) invoke('browser_action', { id, action: button.dataset.action }).catch(error => showError(s, error)); }));
+  s.input.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && s.url) { s.input.value = s.url; s.input.blur(); }
+  });
+  s.input.addEventListener('blur', () => { if (s.url) s.input.value = s.url; });
+  element.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => { if (s.created) invoke('browser_action', { id: s.runtimeId, action: button.dataset.action }).catch(error => showError(s, error)); }));
   if (!isTauri()) s.message.textContent = 'Open the desktop app to use the browser.';
   else if (initial) navigate(s, initial);
   else s.input.focus();
 }
 function showError(s, error) { if (!s.closed) { s.errorMessage.textContent = `Browser error: ${error}`; s.errorMessage.hidden = false; sync(s); } }
+export function rectanglesOverlap(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
 function navigate(s, value) {
   const url = address(value); if (!url || !isTauri()) return;
   s.input.value = url; s.message.hidden = true; s.errorMessage.hidden = true;
   if (!s.created) {
     s.created = true;
-    s.ready = eventsReady.then(() => { if (!s.closed) return invoke('browser_create', { id: s.id, url }); }).then(() => {
-      if (s.closed) return invoke('browser_close', { id: s.id });
+    s.ready = eventsReady.then(() => { if (!s.closed) return invoke('browser_create', { id: s.runtimeId, url }); }).then(() => {
+      if (s.closed) return invoke('browser_close', { id: s.runtimeId });
+      s.element.querySelector('.browser-popup-mode').disabled = false;
       s.key = ''; sync(s);
     }).catch(error => { s.created = false; showError(s, error); });
-  } else s.ready.then(() => { if (!s.closed && s.created) return invoke('browser_navigate', { id: s.id, url }); }).catch(error => showError(s, error));
+  } else s.ready.then(() => { if (!s.closed && s.created) return invoke('browser_navigate', { id: s.runtimeId, url }); }).catch(error => showError(s, error));
 }
 function sync(s) {
   if (!s.created || s.closed) return;
   const r = s.host.getBoundingClientRect();
-  const visible = s.api.isVisible && s.element.isConnected && !!s.element.getClientRects().length && document.visibilityState === 'visible' && !document.querySelector('dialog[open]') && !document.body.classList.contains('custom-dialog-open') && !document.body.classList.contains('space-dialog-open') && !document.body.classList.contains('app-menu-open') && !document.body.classList.contains('settings-open') && r.width > 1 && r.height > 1;
+  // Native child webviews are drawn above the app UI. Hide only a view actually
+  // covered by an open menu; menus elsewhere should not blank browser panes.
+  const menuOverlap = [...document.querySelectorAll('.app-menu[open] .menu-panel')].some(menu => rectanglesOverlap(r, menu.getBoundingClientRect()));
+  const visible = s.api.isVisible && s.element.isConnected && !!s.element.getClientRects().length && document.visibilityState === 'visible' && !document.querySelector('dialog[open]') && !document.body.classList.contains('custom-dialog-open') && !document.body.classList.contains('space-dialog-open') && !menuOverlap && !document.body.classList.contains('settings-open') && r.width > 1 && r.height > 1;
   const scale = window.devicePixelRatio || 1;
   const rect = { x: Math.round(r.left * scale), y: Math.round(r.top * scale), w: Math.max(0, Math.round(r.width * scale)), h: Math.max(0, Math.round(r.height * scale)), visible };
   const key = JSON.stringify(rect); if (key === s.key) return; s.key = key;
@@ -97,15 +152,19 @@ function sync(s) {
   s.position = s.position.then(() => s.ready).then(async () => {
     while (!s.closed && s.pendingRect) {
       const next = s.pendingRect; s.pendingRect = null;
-      await invoke('browser_position', { id: s.id, ...next });
+      await invoke('browser_position', { id: s.runtimeId, ...next });
     }
-  }).catch(error => showError(s, error)).finally(() => { s.positioning = false; });
+  }).catch(error => { showError(s, error); s.key = ''; }).finally(() => {
+    s.positioning = false;
+    if (!s.closed && s.pendingRect) { s.key = ''; sync(s); }
+  });
 }
 export function refreshBrowser(id) { const s = sessions.get(id); if (s) { s.key = ''; requestAnimationFrame(() => sync(s)); } }
 export function closeBrowser(id) {
   const s = sessions.get(id); if (!s) return;
-  sessions.delete(id); s.closed = true; s.observer.disconnect();
-  s.position.finally(() => s.ready).finally(() => invoke('browser_close', { id }).catch(() => {}));
+  sessions.delete(id); runtimeSessions.delete(s.runtimeId); s.closed = true; s.observer.disconnect();
+  s.disposeDownloads?.();
+  s.position.finally(() => s.ready).finally(() => invoke('browser_close', { id: s.runtimeId }).catch(() => {}));
 }
 // Dockview can move or hide a panel without resizing its contents.
 setInterval(() => sessions.forEach(sync), 150);

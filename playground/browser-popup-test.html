@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Browser popup compatibility</title>
+<h1>Browser popup compatibility</h1>
+<p>Serve this file over HTTP on localhost. Each popup should show a message and be able to send a response back to this page.</p>
+<p><a href="browser-popup-target.html" target="_blank">Ordinary new-tab link</a></p>
+<p><button id="url">Open URL with script</button> <button id="blank">Open blank and write</button></p>
+<form action="browser-popup-target.html" method="get" target="popup-form"><input name="test" value="form-value"><button>Open form target</button></form>
+<form action="/popup-post" method="post" target="popup-post"><input name="test" value="post-value"><button>Open POST target</button></form>
+<p>Message from popup: <output id="result">none</output></p>
+<script>
+  document.querySelector('#url').onclick = () => window.open('browser-popup-target.html', 'popup-script');
+  document.querySelector('#blank').onclick = () => {
+    const popup = window.open('', 'popup-blank');
+    if (popup) popup.document.write('<title>Blank popup</title><button onclick="window.opener.postMessage(\'blank response\', location.origin)">Send response</button>');
+  };
+  window.addEventListener('message', event => { if (event.origin === location.origin) document.querySelector('#result').textContent = event.data; });
+</script>

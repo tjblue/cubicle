@@ -1,0 +1,7 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Popup target</title>
+<h1>Popup target</h1>
+<p id="params"></p>
+<button onclick="if (window.opener) window.opener.postMessage('popup response', location.origin)">Send response to opener</button>
+<script>document.querySelector('#params').textContent = location.search || 'No form parameters';</script>

@@ -1,3 +1,4 @@
+import { icon } from './icons.js';
 import { readWorkspace, writeWorkspace, confirmQuitChanges } from './workspace-safety.js';
 import { chooseAction } from './confirm-dialog.js';
 import { parseProfile } from './profiles.js';
@@ -10,23 +11,13 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { browserControls, closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
+import { mountBrowserPrivacy } from './browser-privacy.js';
 import { getFavorites, removeFavorite } from './browser-favorites.js';
 import { captureTerminalDirectories, closeTerminal, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
 
-const icons = {
-  files: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/>',
-  browser: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
-  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4 4"/>',
-  back: '<path d="m14 6-6 6 6 6"/>',
-};
-function icon(name) {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[name]}</svg>`;
-}
-
 const splitActions = [
-  ['Split right', 'right', '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M16.5 9v6M13.5 12h6"/>'],
-  ['Split down', 'below', '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M12 14v4M10 16h4"/>'],
+  ['Split right', 'right', 'splitRight'],
+  ['Split down', 'below', 'splitDown'],
 ];
 function makeSplitButton(label, direction, paths, referencePanel) {
   const button = document.createElement('button');
@@ -34,7 +25,7 @@ function makeSplitButton(label, direction, paths, referencePanel) {
   button.className = 'pane-action';
   button.title = label;
   button.setAttribute('aria-label', label);
-  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+  button.innerHTML = icon(paths);
   button.addEventListener('pointerdown', (event) => event.stopPropagation());
   button.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -43,6 +34,18 @@ function makeSplitButton(label, direction, paths, referencePanel) {
   });
   return button;
 }
+
+
+for (const [selector, name] of [
+  ['#sidebar-toggle', 'sidebar'], ['#space-search-toggle', 'search'],
+  ['#spaces-menu-toggle', 'more'], ['#space-add', 'plus'],
+  ['#settings-close', 'close'], ['#space-dialog-close', 'close'],
+]) {
+  const button = document.querySelector(selector);
+  if (button) button.innerHTML = icon(name);
+}
+const notificationIcon = document.querySelector('#space-notifications svg');
+if (notificationIcon) notificationIcon.outerHTML = icon('bell');
 
 const pendingProfileCommands = new Map();
 const attentionPanes = new Map();
@@ -63,7 +66,7 @@ class DemoPane {
     }
     const bell = document.createElement('button');
     bell.type = 'button'; bell.className = 'pane-action terminal-attention-toggle';
-    bell.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-2.5 7-2.5 8.5h17C20.5 15 18 15 18 8ZM10 20h4"/></svg>';
+    bell.innerHTML = icon('bell');
     const refreshBell = () => { const enabled = !!api.getParameters().attentionEnabled; bell.hidden = api.getParameters().tool !== 'terminal'; bell.classList.toggle('enabled', enabled); bell.setAttribute('aria-pressed', String(enabled)); bell.setAttribute('aria-label', enabled ? 'Disable terminal attention alerts' : 'Enable terminal attention alerts'); bell.title = enabled ? 'Terminal attention alerts on' : 'Terminal attention alerts off'; };
     bell.onclick = () => { api.updateParameters({ ...api.getParameters(), attentionEnabled: !api.getParameters().attentionEnabled }); refreshBell(); if (!api.getParameters().attentionEnabled) clearAttention(api.id); window.dispatchEvent(new Event('space-content-change')); };
     toolbar.append(bell);
@@ -147,7 +150,10 @@ class DemoPane {
       api.setTitle('Browser');
       content.classList.add('browser-content');
       content.replaceChildren();
-      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state), url => openBrowserLink(url, api.id));
+      mountBrowser(api.id, content, api, address, params.profileFavorites || [], state => savePaneState(api.id, 'browser', state), url => openBrowserLink(url, api.id), action => {
+        if (action === 'new-tab') add('within', api.id);
+        if (action === 'close-tab' && dock.getPanel(api.id)?.api === api) api.close();
+      });
     };
     const showTerminal = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'terminal' });
@@ -281,7 +287,7 @@ class WorkspaceTab extends DefaultTab {
     this.groupBadge.className = 'tab-group-badge';
     this.element.prepend(this.groupBadge, this.favicon);
     this.bell = document.createElement('button'); this.bell.type = 'button'; this.bell.className = 'pane-action terminal-attention-toggle tab-bell';
-    this.bell.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-2.5 7-2.5 8.5h17C20.5 15 18 15 18 8ZM10 20h4"/></svg>';
+    this.bell.innerHTML = icon('bell');
     this.bell.addEventListener('pointerdown', event => event.stopPropagation());
     this.bell.addEventListener('click', event => { event.stopPropagation(); const enabled = !this.api.getParameters().attentionEnabled; this.api.updateParameters({ ...this.api.getParameters(), attentionEnabled: enabled }); if (!enabled) clearAttention(this.api.id); window.dispatchEvent(new Event('space-content-change')); });
     this.element.append(this.bell);
@@ -357,7 +363,7 @@ const dock = createDockview(document.getElementById('dock'), {
     button.className = 'new-tab-button';
     button.title = 'New tab';
     button.setAttribute('aria-label', 'New tab');
-    button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+    button.innerHTML = icon('plus');
     const onPointerDown = (event) => event.stopPropagation();
     const onClick = (event) => {
       event.stopPropagation();
@@ -521,8 +527,8 @@ function renderSpaces() {
   for (const space of visible) {
     const row = document.createElement('div'); row.className = 'space-row';
     const select = document.createElement('button'); select.type = 'button'; select.className = 'space-select';
-    const folder = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); folder.setAttribute('viewBox', '0 0 24 24'); folder.setAttribute('fill', 'none'); folder.setAttribute('stroke', 'currentColor'); folder.setAttribute('stroke-width', '1.7'); folder.setAttribute('aria-hidden', 'true'); folder.classList.add('space-folder');
-    const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path'); shape.setAttribute('d', 'M3 5.5h6l2 2h10v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'); folder.append(shape); folder.style.color = currentSpaceColor(space);
+    const folderContainer = document.createElement('span'); folderContainer.innerHTML = icon('files');
+    const folder = folderContainer.firstElementChild; folder.classList.add('space-folder'); folder.style.color = currentSpaceColor(space);
     const labels = document.createElement('span'); labels.className = 'space-label'; const name = document.createElement('span'); name.className = 'space-name'; name.textContent = space.name; labels.append(name);
     if (showSpacePaths) { const path = document.createElement('span'); path.className = 'space-path'; path.textContent = displaySpacePath(space.path) || 'Home folder'; labels.append(path); }
     select.append(folder, labels); select.title = `${space.name} — ${displaySpacePath(space.path) || 'Home folder'}`;
@@ -865,6 +871,13 @@ sidebarDivider.addEventListener('keydown', (event) => {
 
 // Settings overlays the workspace without destroying its panes or sessions.
 const settingsPage = document.getElementById('settings-page');
+const browserPrivacyLink = document.createElement('a');
+browserPrivacyLink.href = '#settings-browser-privacy'; browserPrivacyLink.textContent = 'Browser privacy';
+settingsPage.querySelector('.settings-nav').append(browserPrivacyLink);
+const browserPrivacySection = document.createElement('section');
+browserPrivacySection.id = 'settings-browser-privacy'; browserPrivacySection.tabIndex = -1;
+settingsPage.querySelector('.settings-content').append(browserPrivacySection);
+const browserPrivacy = mountBrowserPrivacy(browserPrivacySection);
 const settingsClose = document.getElementById('settings-close');
 let settingsOpener = null;
 function openSettings(section, opener) {
@@ -901,6 +914,7 @@ function showSettingsSection(id) {
   const sections = settingsPage.querySelectorAll('.settings-content > section');
   if (![...sections].some(section => section.id === id)) id = 'settings-app';
   sections.forEach(section => { section.hidden = section.id !== id; });
+  if (id === 'settings-browser-privacy') void browserPrivacy.refresh();
   settingsPage.querySelectorAll('.settings-nav a').forEach(link => {
     if (link.hash === `#${id}`) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');

@@ -1,0 +1,8 @@
+.browser-downloads { padding: 10px 12px; color: var(--text-primary); background: var(--surface-card); border-bottom: 1px solid var(--border-subtle); max-height: 220px; overflow: auto; }
+.browser-downloads[hidden] { display: none; }
+.browser-download-list { display: grid; gap: 8px; margin-top: 8px; color: var(--text-muted); }
+.browser-download-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 3px 10px; align-items: center; }
+.browser-download-row strong, .browser-download-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-download-row small { grid-column: 1; }
+.browser-download-row progress { width: 100%; height: 6px; grid-column: 1; }
+.browser-download-row button { grid-row: 1 / span 3; }

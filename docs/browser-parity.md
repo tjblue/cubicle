@@ -1,6 +1,6 @@
 # WebView2 browser review
 
-Reviewed November 11, 2026 against the pinned Tauri 2.11.5 / Wry 0.55.1 implementation. Compilation and automated tests are not a substitute for the desktop checks below.
+Updated November 12, 2026 against the pinned Tauri 2.11.5 / Wry 0.55.1 implementation. Compilation and automated tests are not a substitute for the desktop checks below.
 
 ## Changes
 
@@ -8,25 +8,30 @@ Reviewed November 11, 2026 against the pinned Tauri 2.11.5 / Wry 0.55.1 implemen
 - Windows Back, Forward and Reload use WebView2 methods instead of page JavaScript. SourceChanged and HistoryChanged update the address bar (including same-document navigation) and history button availability.
 - Browser accelerator keys, zoom controls and the link-hover status bar are enabled in browser views.
 - Browser errors appear above the native view; event subscription completes before creating a browser.
+- Loading changes Reload to Stop. Windows shortcuts Ctrl+L, Ctrl+T and Ctrl+W are routed from the browser view to Cubicle.
+- The browser toolbar has a separate-window toggle for sites whose popups need their opener or original request. Blank popups use a separate window automatically. These paths require desktop verification.
+- The downloads panel tracks WebView2 transfers for the current run and offers cancel and pause/resume. WebView2's native save UI remains in use. Browser privacy settings list/reset saved permissions and clear site data or disk cache on Windows.
 
 ## Remaining gaps
 
 | Feature | Current status / limitation |
 | --- | --- |
 | Ordinary target=_blank links | Routed to a new tab; desktop acceptance check still required for Ctrl-click, middle-click and context-menu Open in new window. |
-| Scripted popups / OAuth / payments | URL routing creates an independent GET navigation. It does not preserve window.opener, returned WindowProxy, postMessage relationships, named-window reuse, popup dimensions, POST bodies or blank-window document.write. about:blank, blob and data popup URLs report an error. These require native NewWindowRequested deferral and SetNewWindow with a shared WebView2 environment. Tauri's current Create response accepts a WebviewWindow, not our child Webview. |
+| Scripted popups / OAuth / payments | Default URL-to-tab routing creates an independent GET navigation and cannot preserve opener or POST. Toggle separate-window mode before opening a popup to use Tauri's native Create response; blank popups automatically use it. Actual opener, POST, nested popup and OAuth behavior still needs desktop testing. Tauri's Create response accepts a WebviewWindow, not our child Webview, so compatibility popups are separate windows with an origin in the title but no Cubicle address bar. |
 | Popup blocking | No per-site policy or user-gesture filter. All supported-URL requests become tabs. |
-| Navigation chrome | No loading progress, Stop button, custom failed-navigation/retry UI, or persisted browsing history. Engine error pages remain in use. History controls are updated natively on Windows only. |
-| Keyboard | Engine accelerators enabled; desktop verification required for Find, Print, Reload and zoom. Ctrl+L, Ctrl+T and Ctrl+W are not bridged from the focused child webview into Cubicle's address bar/tab controls. |
-| Downloads / uploads | Engine defaults; no Cubicle download manager, progress/history, cancellation or destination policy. File chooser, save dialog, blob downloads and PDF behavior need desktop testing. |
-| Permissions | No Cubicle site-permission settings or remembered-permission management. Camera, microphone, geolocation, notifications and clipboard prompts require desktop verification. |
+| Navigation chrome | Reload/Stop and loading state are implemented, but no numeric progress, custom failed-navigation/retry UI, or persisted browsing history. Engine error pages remain in use. History controls are updated natively on Windows only. |
+| Keyboard | Engine accelerators and Ctrl+L/T/W routing are implemented; desktop verification is required, including Find, Print, Reload and zoom. |
+| Downloads / uploads | The panel tracks progress and actions during the current session. It can show completed files in their folder; it does not persist history or provide an open action. Tracking is attached before the requested initial navigation and to compatibility popup windows; this ordering requires desktop verification. File chooser, save dialog, blob downloads, pause/resume and PDF behavior need desktop testing. |
+| Permissions | Windows settings can inspect and reset supported saved HTTP(S) site permissions; native WebView2 prompts remain in use. Camera, microphone, geolocation, notifications and clipboard prompts require desktop verification. |
 | External schemes | Address input / new-tab routing support HTTP, HTTPS and file only. No app-owned mailto/tel/custom-protocol confirmation flow. |
 | Fullscreen / dialogs | No host integration for page-requested fullscreen. JavaScript dialogs and beforeunload need testing; Cubicle tab closure does not provide an explicit unsaved-web-form confirmation workflow. |
-| Profile | Browser panes share a persistent profile separated from the privileged UI. No incognito, cookie/site-data clearing UI, password manager UI or certificate details UI. |
+| Profile | Browser panes share a persistent profile separated from the privileged UI. Site data and disk cache clearing are exposed in settings. No incognito, password manager UI or certificate details UI. |
 | Extensions | Existing unpacked extension management remains; browser toolbar/action UI and full Edge extension parity are not provided. |
 | Non-Windows | Existing JavaScript history fallback remains; native tracking and accelerator configuration in this change apply to WebView2 only. |
 
 ## Desktop acceptance checklist (not yet executed)
+
+For the local popup fixture, run `node playground/browser-test-server.js` and open `http://127.0.0.1:4180/` in a Browser pane. The POST and opener checks should be run with the toolbar's separate-window mode enabled as well as in the default mode.
 
 1. Open a page, follow same-tab links and redirects, navigate fragments and SPA routes, then Back/Forward/Reload; verify address and enabled controls.
 2. Open ordinary target=_blank links by click, Ctrl-click, middle-click and context menu. Confirm one tab in the originating group, including when another group is active.

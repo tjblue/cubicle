@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;
+mod browser_downloads;
+mod browser_privacy;
 mod extensions;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -416,7 +418,8 @@ fn main() {
             tauri::http::Response::builder().status(204).header("Access-Control-Allow-Origin", "*").body(Vec::new()).unwrap()
         })
         .manage(Terminals::default())
-        .invoke_handler(tauri::generate_handler![restart_app, extensions::extensions_list, extensions::extensions_inspect, extensions::extensions_choose_folder, extensions::extensions_discover_edge, extensions::extensions_import, extensions::extensions_set_enabled, extensions::extensions_remove, close_to_tray_enabled, terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_file_url, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
+        .manage(browser_downloads::Downloads::default())
+        .invoke_handler(tauri::generate_handler![restart_app, browser_downloads::browser_downloads_list, browser_downloads::browser_download_reveal, browser_downloads::browser_download_action, browser_privacy::browser_permissions_list, browser_privacy::browser_permission_reset, browser_privacy::browser_data_clear, extensions::extensions_list, extensions::extensions_inspect, extensions::extensions_choose_folder, extensions::extensions_discover_edge, extensions::extensions_import, extensions::extensions_set_enabled, extensions::extensions_remove, close_to_tray_enabled, terminal_start, terminal_write, terminal_default_cwd, terminal_working_directory, terminal_log_enter, terminal_resize, terminal_close, terminal_clipboard_read, terminal_clipboard_write, chat_resume_hook_status, chat_resume_recent_hooks, terminal_agent_kinds, chat_resume_install_hook, validate_directory, choose_space_folder, choose_file_folder, list_files, preview_file, preview_image, save_markdown, resolve_file_link, browser::browser_file_url, browser::browser_set_popup_mode, browser::browser_create, browser::browser_position, browser::browser_navigate, browser::browser_action, browser::browser_close])
         .build(tauri::generate_context!())
         .expect("failed to build Cubicle")
         .run(|app, event| {
