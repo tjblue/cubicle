@@ -37,7 +37,7 @@ After unreadable workspace data triggers recovery, workspace saving is locked. O
 
 **Evidence:** Reproduced by executing the real switch/removal handlers with storage locked; the dirty file pane was closed.
 
-**Code:** [src.js:469](C:/Users/lbltyler/dev/cubicle/src/src.js:469), [src.js:542](C:/Users/lbltyler/dev/cubicle/src/src.js:542), [src.js:695](C:/Users/lbltyler/dev/cubicle/src/src.js:695).
+**Code:** [src.js:469](../src/src.js:469), [src.js:542](../src/src.js:542), [src.js:695](../src/src.js:695).
 
 ### R2 — Medium: interface reload leaves old terminal sessions unmanaged
 
@@ -51,7 +51,7 @@ Open an idle terminal and use **Reload interface**. Reload closes the native bro
 
 **Evidence:** Frontend/backend lifecycle code inspection. Native process behavior was not exercised.
 
-**Code:** [src.js:1008](C:/Users/lbltyler/dev/cubicle/src/src.js:1008), [main.rs:60](C:/Users/lbltyler/dev/cubicle/src-tauri/src/main.rs:60), [terminal.js:26](C:/Users/lbltyler/dev/cubicle/src/terminal.js:26).
+**Code:** [src.js:1008](../src/src.js:1008), [main.rs:60](../src-tauri/src/main.rs:60), [terminal.js:26](../src/terminal.js:26).
 
 ### R3 — Medium: Windows working directories become stale without shell integration
 
@@ -65,7 +65,7 @@ In a Windows shell that does not independently emit OSC 7 directory updates, run
 
 **Evidence:** The non-Linux backend branch unconditionally returns `None`. A direct capture probe confirmed that a null lookup leaves the old directory unchanged.
 
-**Code:** [main.rs:95](C:/Users/lbltyler/dev/cubicle/src-tauri/src/main.rs:95), [terminal.js:32](C:/Users/lbltyler/dev/cubicle/src/terminal.js:32), [terminal-directory-capture.js:6](C:/Users/lbltyler/dev/cubicle/src/terminal-directory-capture.js:6).
+**Code:** [main.rs:95](../src-tauri/src/main.rs:95), [terminal.js:32](../src/terminal.js:32), [terminal-directory-capture.js:6](../src/terminal-directory-capture.js:6).
 
 ### R4 — Medium: absolute terminal file paths containing spaces are split
 
@@ -79,7 +79,7 @@ The path `C:/Users/Jane Doe/project/main.js:12:3` produces two links: `C:/Users/
 
 **Evidence:** Reproduced by calling the real `findFileLinks()` helper.
 
-**Code:** [terminal-links.js:2](C:/Users/lbltyler/dev/cubicle/src/terminal-links.js:2).
+**Code:** [terminal-links.js:2](../src/terminal-links.js:2).
 
 ### R5 — Medium: selected documents cannot be refreshed or retried directly
 
@@ -93,7 +93,7 @@ Open a file, modify it externally, then click it again or refresh the folder. `o
 
 **Evidence:** Reproduced: opening, reopening, refreshing, and reopening again invoked `preview_file` only once.
 
-**Code:** [files.js:158](C:/Users/lbltyler/dev/cubicle/src/files.js:158), [files.js:278](C:/Users/lbltyler/dev/cubicle/src/files.js:278).
+**Code:** [files.js:158](../src/files.js:158), [files.js:278](../src/files.js:278).
 
 ### R6 — Medium: deleted or moved pinned files cannot be unpinned
 
@@ -107,7 +107,7 @@ Pin a file, delete or move it outside Cubicle, and click the pin. Each pinned ro
 
 **Evidence:** Reproduced with a missing pin; opening failed and the pin remained with no removal control.
 
-**Code:** [files.js:188](C:/Users/lbltyler/dev/cubicle/src/files.js:188), [files.js:199](C:/Users/lbltyler/dev/cubicle/src/files.js:199).
+**Code:** [files.js:188](../src/files.js:188), [files.js:199](../src/files.js:199).
 
 ### R7 — Medium: local Markdown images with encoded filenames fail
 
@@ -121,7 +121,7 @@ For `![Example](images/my%20image.png)`, image loading decodes Cubicle's interna
 
 **Evidence:** Reproduced the sanitization/resolution inputs; no native rendering was required to demonstrate the incorrect filename.
 
-**Code:** [files.js:70](C:/Users/lbltyler/dev/cubicle/src/files.js:70), [markdown-safety.js:4](C:/Users/lbltyler/dev/cubicle/src/markdown-safety.js:4).
+**Code:** [files.js:70](../src/files.js:70), [markdown-safety.js:4](../src/markdown-safety.js:4).
 
 ### R8 — Medium: local-image resolution is absent in Markdown editing
 
@@ -135,7 +135,7 @@ The read-only preview resolves local images through native file access and blob 
 
 **Evidence:** Code inspection and an instrumented harness confirm resolution runs only for preview. Actual Milkdown/native rendering remains unverified.
 
-**Code:** [files.js:163](C:/Users/lbltyler/dev/cubicle/src/files.js:163), [files.js:254](C:/Users/lbltyler/dev/cubicle/src/files.js:254), [markdown-editor.js:17](C:/Users/lbltyler/dev/cubicle/src/markdown-editor.js:17).
+**Code:** [files.js:163](../src/files.js:163), [files.js:254](../src/files.js:254), [markdown-editor.js:17](../src/markdown-editor.js:17).
 
 ### R9 — Low: generated Markdown heading IDs can collide
 
@@ -149,7 +149,7 @@ Headings `Foo`, `Foo-1`, and `Foo` generate IDs `foo`, `foo-1`, and `foo-1`. Dup
 
 **Evidence:** Reproduced with the real heading-ID helper.
 
-**Code:** [markdown-safety.js:40](C:/Users/lbltyler/dev/cubicle/src/markdown-safety.js:40), [files.js:249](C:/Users/lbltyler/dev/cubicle/src/files.js:249).
+**Code:** [markdown-safety.js:40](../src/markdown-safety.js:40), [files.js:249](../src/files.js:249).
 
 ### R10 — Medium: browser address text can remain stale after navigation
 
@@ -163,7 +163,7 @@ If a redirect or navigation URL arrives while the address input is focused, the 
 
 **Evidence:** Reproduced against the real module: saved state changed to `/redirected`, while the displayed input stayed at `/start` after blur.
 
-**Code:** [browser.js:17](C:/Users/lbltyler/dev/cubicle/src/browser.js:17), [browser.js:69](C:/Users/lbltyler/dev/cubicle/src/browser.js:69).
+**Code:** [browser.js:17](../src/browser.js:17), [browser.js:69](../src/browser.js:69).
 
 ### R11 — Medium: extension toggles can silently fail during other operations
 
@@ -177,7 +177,7 @@ Start Edge discovery, then toggle an installed extension. The switch remains int
 
 **Evidence:** Reproduced against the real module; no `extensions_set_enabled` call occurred.
 
-**Code:** [extensions-settings.js:32](C:/Users/lbltyler/dev/cubicle/src/extensions-settings.js:32), [extensions-settings.js:64](C:/Users/lbltyler/dev/cubicle/src/extensions-settings.js:64).
+**Code:** [extensions-settings.js:32](../src/extensions-settings.js:32), [extensions-settings.js:64](../src/extensions-settings.js:64).
 
 ### R12 — Medium: importing an update with the same extension ID is rejected
 
@@ -191,7 +191,7 @@ Import a newer extension version that retains an installed extension's ID. The d
 
 **Evidence:** Confirmed in the backend branch; native installation was not run. This finding specifically concerns imports returning an existing ID.
 
-**Code:** [extensions.rs:124](C:/Users/lbltyler/dev/cubicle/src-tauri/src/extensions.rs:124).
+**Code:** [extensions.rs:124](../src-tauri/src/extensions.rs:124).
 
 ### R13 — Medium: the Edge profile picker expects the wrong folder level
 
@@ -205,7 +205,7 @@ Choose an actual Edge profile directory, such as `Profile 1`, using **Choose pro
 
 **Evidence:** Frontend/backend code inspection.
 
-**Code:** [extensions-settings.js:96](C:/Users/lbltyler/dev/cubicle/src/extensions-settings.js:96), [extensions.rs:188](C:/Users/lbltyler/dev/cubicle/src-tauri/src/extensions.rs:188).
+**Code:** [extensions-settings.js:96](../src/extensions-settings.js:96), [extensions.rs:188](../src-tauri/src/extensions.rs:188).
 
 ### R14 — Medium: profile operations can hide failed persistence
 
@@ -219,7 +219,7 @@ New, Duplicate, Delete, and Import ignore a failed `persistProfiles()` result. R
 
 **Evidence:** Reproduced the import handler with a failing persistence stub; its final status was “Profile imported.”
 
-**Code:** [src.js:965](C:/Users/lbltyler/dev/cubicle/src/src.js:965).
+**Code:** [src.js:965](../src/src.js:965).
 
 ### R15 — Low: custom file-pane titles in profiles are overwritten
 
@@ -233,7 +233,7 @@ A files tab with `"title": "Project Notes"` initially receives that title, but i
 
 **Evidence:** Reproduced by executing the actual `showFiles()` code.
 
-**Code:** [src.js:135](C:/Users/lbltyler/dev/cubicle/src/src.js:135), [src.js:987](C:/Users/lbltyler/dev/cubicle/src/src.js:987).
+**Code:** [src.js:135](../src/src.js:135), [src.js:987](../src/src.js:987).
 
 ### R16 — Medium: malformed saved metadata can bypass recovery and break startup
 
@@ -247,7 +247,7 @@ A saved space with valid ID/name but `"path": 42` passes workspace validation. R
 
 **Evidence:** Reproduced using the real workspace validator and path formatter.
 
-**Code:** [workspace-safety.js:3](C:/Users/lbltyler/dev/cubicle/src/workspace-safety.js:3), [src.js:462](C:/Users/lbltyler/dev/cubicle/src/src.js:462), [src.js:567](C:/Users/lbltyler/dev/cubicle/src/src.js:567).
+**Code:** [workspace-safety.js:3](../src/workspace-safety.js:3), [src.js:462](../src/src.js:462), [src.js:567](../src/src.js:567).
 
 ## Desktop verification candidate
 
@@ -259,7 +259,7 @@ Right-clicking a browser tab creates an HTML menu extending over the native brow
 
 The missing condition is confirmed in code; actual occlusion must be checked in the desktop app. If reproduced, use the same hide/restore mechanism already used for other overlays.
 
-**Code:** [browser.js:90](C:/Users/lbltyler/dev/cubicle/src/browser.js:90), [src.js:196](C:/Users/lbltyler/dev/cubicle/src/src.js:196).
+**Code:** [browser.js:90](../src/browser.js:90), [src.js:196](../src/src.js:196).
 
 ## Worthwhile additions after the functional fixes
 

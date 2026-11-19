@@ -4,12 +4,6 @@
 
 Cubicle brings **terminals, files, and the web** together in one flexible desktop workspace. Split the view around the way you work, keep projects in separate Spaces, and pick up where you left off with saved layouts.
 
-<p align="center">
-  <img src="cubicle-screenshot.png" alt="Cubicle desktop app showing a terminal alongside a file browser in a project workspace" width="100%">
-</p>
-
-<p align="center"><em>A project space with a live PowerShell terminal and file browser side by side.</em></p>
-
 ## One workspace. All your tools.
 
 | 💻 Terminal | 📁 Files & Markdown | 🌐 Embedded browser |

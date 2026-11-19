@@ -1,7 +1,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const colors = ['#8faafa', '#80d2b6', '#e2b47a', '#d39be0', '#ef9095', '#8fc5da'];
-  const examples = ['C:\\Users\\tyler\\Projects\\Atlas', 'C:\\Users\\tyler\\Projects\\Northstar', 'C:\\Users\\tyler\\Projects\\Sandbox', 'C:\\Users\\tyler\\Documents'];
+  const examples = ['C:\\Users\\developer\\Projects\\Atlas', 'C:\\Users\\developer\\Projects\\Northstar', 'C:\\Users\\developer\\Projects\\Sandbox', 'C:\\Users\\developer\\Documents'];
   const descriptions = {
     inspector: ['Side inspector', 'A persistent editor keeps space settings visible while the workspace stays in view. Good for deliberate setup and future options.'],
     popover: ['Quick editor', 'A small anchored editor keeps common changes close to the selected space and leaves most of the workspace unobstructed.'],
