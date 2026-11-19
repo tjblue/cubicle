@@ -11,6 +11,7 @@ test('routes OSC notifications and bells to their own terminals, excluding progr
   const dispose = listenForTerminalAttention(first, kind => events.push(['first', kind]));
   listenForTerminalAttention(second, kind => events.push(['second', kind]));
   assert.equal(first.handlers.osc('4;1;50'), false);
+  assert.equal(first.handlers.osc('9;C:\\work'), false);
   assert.equal(first.handlers.osc('Turn complete'), true);
   second.handlers.bell();
   assert.deepEqual(events, [['first', 'notification'], ['second', 'bell']]);

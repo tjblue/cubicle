@@ -217,6 +217,20 @@ pub fn browser_close(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn browser_close_all(app: AppHandle) -> Result<(), String> {
+    for (label, _) in app.webviews() {
+        if let Some(id) = label.strip_prefix("browser-") { browser_close(app.clone(), id.to_string())?; }
+    }
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn finish_missing_extension(completion: &std::sync::mpsc::Sender<Result<(), String>>, enabled: Option<bool>) {
+    let result = if enabled.is_none() { Ok(()) } else { Err("Extension is not installed in the browser profile.".into()) };
+    let _ = completion.send(result);
+}
+
 #[cfg(windows)]
 mod navigation_runtime {
     use super::*;
@@ -384,7 +398,8 @@ mod extensions_runtime {
                             }
                             return Ok(());
                         }
-                        Err("Extension is not installed in the browser profile.".into())
+                        finish_missing_extension(&tx_list, enabled);
+                        Ok(())
                     })();
                     if let Err(error) = action { let _ = tx_list.send(Err(error)); }
                     Ok(())
@@ -438,5 +453,20 @@ mod tests {
         assert_eq!(web_url(&url).unwrap().to_file_path().unwrap().canonicalize().unwrap(), file.canonicalize().unwrap());
         assert!(browser_file_url(dir.path().to_string_lossy().into_owned()).is_err());
         assert!(web_url("javascript:alert(1)").is_err());
+    }    #[test]
+    fn removing_an_absent_extension_completes_successfully() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        finish_missing_extension(&tx, None);
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(), Ok(()));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn toggling_an_absent_extension_still_completes_with_an_error() {
+        for enabled in [false, true] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            finish_missing_extension(&tx, Some(enabled));
+            assert!(rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap().is_err());
+        }
     }
 }

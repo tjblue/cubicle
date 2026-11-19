@@ -1,5 +1,5 @@
 import { icon } from './icons.js';
-import { readWorkspace, writeWorkspace, confirmQuitChanges } from './workspace-safety.js';
+import { readWorkspace, writeWorkspace, confirmQuitChanges, updateSpaceFileRoots } from './workspace-safety.js';
 import { chooseAction } from './confirm-dialog.js';
 import { parseProfile } from './profiles.js';
 import { createDockview, themeDark, DefaultTab } from 'dockview';
@@ -10,10 +10,10 @@ import { mountFiles, hasFiles, closeFiles, setFilesRoot, openFileInPane, filePan
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
-import { browserControls, closeBrowser, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
+import { browserControls, closeBrowser, closeBrowsersForReload, hasBrowser, mountBrowser, refreshBrowser } from './browser.js';
 import { mountBrowserPrivacy } from './browser-privacy.js';
 import { getFavorites, removeFavorite } from './browser-favorites.js';
-import { captureTerminalDirectories, closeTerminal, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
+import { captureTerminalDirectories, closeTerminal, closeTerminalsForReload, getTerminalTitle, hasTerminal, mountTerminal, refreshTerminal } from './terminal.js';
 
 const splitActions = [
   ['Split right', 'right', 'splitRight'],
@@ -34,7 +34,6 @@ function makeSplitButton(label, direction, paths, referencePanel) {
   });
   return button;
 }
-
 
 for (const [selector, name] of [
   ['#sidebar-toggle', 'sidebar'], ['#space-search-toggle', 'search'],
@@ -135,9 +134,10 @@ class DemoPane {
     const showFiles = () => {
       api.updateParameters({ ...api.getParameters(), tool: 'files' });
       refreshBell();
-      api.setTitle('Files');
+      api.setTitle(params.profileTitle || 'Files');
       content.replaceChildren();
-      mountFiles(api.id, content, showStart, params.filesRoot || params.profileRoot || currentSpacePath(), params.profilePins || [], {
+      const filesRoot = params.filesRoot !== undefined ? params.filesRoot : params.profileRoot || currentSpacePath();
+      mountFiles(api.id, content, showStart, filesRoot, params.profilePins || [], {
         preview: params.filesPreview || params.openFile, filePins: params.filePins || [],
         onStateChange: state => savePaneState(api.id, 'files', { filesRoot: state.root, filesPreview: state.preview, filePins: state.filePins, openFile: undefined }),
         onOpenUrl: url => openBrowserLink(url, api.id),
@@ -165,7 +165,7 @@ class DemoPane {
       pendingProfileCommands.delete(api.id);
       mountTerminal(api.id, content, api.getParameters().terminalCwd || params.agentSession?.cwd || params.profileCwd || currentSpacePath(), (title) => {
         if (!api.getParameters().terminalName) api.setTitle(title || 'Terminal');
-      }, (path, cwd) => void handleTerminalFileLink(path, cwd, api.id), { shell: params.profileShell, env: params.profileEnv, command: startupCommand, savedCwd: !!(api.getParameters().terminalCwd || params.agentSession?.cwd), fallbackCwd: params.profileCwd || currentSpacePath(), onCwdChange: cwd => saveTerminalCwd(api.id, cwd), onAttention: kind => receiveAttention(api.id, kind) });
+      }, (path, cwd) => void handleTerminalFileLink(path, cwd, api.id), { shell: params.profileShell, env: params.profileEnv, command: startupCommand, savedCwd: !!(api.getParameters().terminalCwd || params.agentSession?.cwd), fallbackCwd: params.profileCwd || currentSpacePath(), onCwdChange: cwd => saveTerminalCwd(api.id, cwd), onAttention: kind => receiveAttention(api.id, kind), onInput: () => clearAttention(api.id) });
       content.addEventListener('pointerdown', () => clearAttention(api.id));
     };
     if (hasTerminal(api.id) || params.tool === 'terminal') showTerminal(); else if (hasBrowser(api.id) || params.tool === 'browser') showBrowser(params.address || ''); else if (hasFiles(api.id) || params.tool === 'files') showFiles(); else showStart();
@@ -193,7 +193,12 @@ terminalCloseDialog.addEventListener('close', () => {
 
 const tabGroupColors = ['#89a8f8', '#80d6bb', '#e6b37a', '#d29ce2', '#ef9095', '#8fc5da'];
 let tabGroupMenu;
-function closeTabGroupMenu() { tabGroupMenu?.remove(); tabGroupMenu = null; }
+function closeTabGroupMenu() {
+  if (!tabGroupMenu) return;
+  tabGroupMenu.remove(); tabGroupMenu = null;
+  document.body.classList.remove('tab-group-menu-open');
+  window.dispatchEvent(new Event('tab-group-menu-visibility'));
+}
 function setTabGroup(panel, group) {
   panel.api.updateParameters({ ...panel.api.getParameters(), tabGroup: group || undefined });
   window.dispatchEvent(new Event('space-content-change'));
@@ -249,6 +254,8 @@ function showTabGroupMenu(event, api) {
     });
   }
   document.body.append(menu);
+  document.body.classList.add('tab-group-menu-open');
+  window.dispatchEvent(new Event('tab-group-menu-visibility'));
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - rect.width))}px`;
   menu.style.top = `${Math.max(0, Math.min(event.clientY, innerHeight - rect.height))}px`;
@@ -471,7 +478,7 @@ function persistSpaces() {
   if (!workspaceSaveWarning) { workspaceSaveWarning = true; alert('Could not save the workspace. Changes may be lost when Cubicle closes. Check available storage and try again.'); } return false;
 }
 function saveActiveSpace() {
-  if (switchingSpace || workspaceStorageLocked) return false;
+  if (switchingSpace) return false;
   const space = spaces.find(item => item.id === activeSpaceId);
   if (space) { space.layout = dock.toJSON(); return persistSpaces(); }
   return false;
@@ -545,8 +552,7 @@ function renderSpaces() {
 function switchSpace(id) {
   if (id === activeSpaceId) return;
   clearTimeout(saveTimer); saveActiveSpace();
-  const oldSpace = spaces.find(item => item.id === activeSpaceId);
-  for (const panelId of panelIds(oldSpace?.layout)) retainedPanels.add(panelId);
+  for (const panel of dock.panels) retainedPanels.add(panel.id);
   activeSpaceId = id;
   const space = spaces.find(item => item.id === id);
   space.lastOpened = Date.now();
@@ -664,10 +670,10 @@ spaceForm.addEventListener('submit', async event => {
       const space = editingSpace, pathChanged = (space.path || null) !== validated;
       Object.assign(space, { name, path: validated, color: draftSpaceColor });
       if (pathChanged) {
-        const ids = space.id === activeSpaceId ? dock.panels.map(panel => panel.id) : panelIds(space.layout);
-        for (const id of ids) setFilesRoot(id, validated);
+        updateSpaceFileRoots(space, validated, { panels: space.id === activeSpaceId ? dock.panels : null, hasFiles, setFilesRoot });
       }
-      persistSpaces(); closeSpaceDialog(); renderSpaces();
+      if (space.id === activeSpaceId) saveActiveSpace(); else persistSpaces();
+      closeSpaceDialog(); renderSpaces();
     } else {
       const space = { id: crypto.randomUUID(), name, path: validated, color: draftSpaceColor, layout: null };
       spaces.push(space); spaceSearch.value = ''; closeSpaceDialog(); switchSpace(space.id);
@@ -941,7 +947,13 @@ const profileSelect = document.getElementById('profile-select'), profileJson = d
 let profiles = [], profileIndex = 0, profileDirty = false;
 try { const saved = JSON.parse(localStorage.getItem('cubicle-launch-profiles-v1') || '[]'); if (Array.isArray(saved)) profiles = saved.filter(p => { try { parseProfile(p); return true; } catch { return false; } }); } catch { /* Use a default. */ }
 if (!profiles.length) profiles = [{ name: 'My profile', panes: ['terminal', 'files'] }];
-function persistProfiles() { try { localStorage.setItem('cubicle-launch-profiles-v1', JSON.stringify(profiles)); return true; } catch { profileStatus.textContent = 'Could not save profiles to local storage.'; return false; } }
+function persistProfiles(nextProfiles = profiles) { try { localStorage.setItem('cubicle-launch-profiles-v1', JSON.stringify(nextProfiles)); return true; } catch { profileStatus.textContent = 'Could not save profiles to local storage. Your current profile and edits have been kept.'; return false; } }
+function commitProfiles(nextProfiles, nextIndex) {
+  if (!persistProfiles(nextProfiles)) return false;
+  profiles = nextProfiles; profileIndex = nextIndex;
+  renderProfiles();
+  return true;
+}
 function renderProfilePreview() {
   const preview = document.getElementById('profile-preview');
   const error = document.getElementById('profile-preview-error');
@@ -968,18 +980,18 @@ profileSelect.onchange = () => { if (profileDirty && !confirm('Discard unsaved p
 profileJson.oninput = () => { profileDirty = true; profileStatus.textContent = 'Unsaved changes'; renderProfilePreview(); };
 function saveProfileEdits() {
   try {
-    const previous = profiles[profileIndex];
-    profiles[profileIndex] = parseProfile(profileJson.value).source;
-    if (!persistProfiles()) { profiles[profileIndex] = previous; return false; }
-    renderProfiles(); profileStatus.textContent = 'Profile saved.'; return true;
+    const nextProfiles = [...profiles];
+    nextProfiles[profileIndex] = parseProfile(profileJson.value).source;
+    if (!commitProfiles(nextProfiles, profileIndex)) return false;
+    profileStatus.textContent = 'Profile saved.'; return true;
   } catch (e) { profileStatus.textContent = `Cannot save: ${e.message}`; return false; }
 }
 document.getElementById('profile-save').onclick = saveProfileEdits;
-document.getElementById('profile-new').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; profiles.push({ name: 'New profile', panes: ['terminal'] }); profileIndex = profiles.length - 1; persistProfiles(); renderProfiles(); };
-document.getElementById('profile-duplicate').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; const copy = structuredClone(profiles[profileIndex]); copy.name += ' copy'; profiles.push(copy); profileIndex = profiles.length - 1; persistProfiles(); renderProfiles(); };
-document.getElementById('profile-delete').onclick = () => { if (!confirm('Delete this profile? Existing spaces are not affected.')) return; profiles.splice(profileIndex, 1); if (!profiles.length) profiles.push({ name: 'New profile', panes: ['terminal'] }); profileIndex = 0; persistProfiles(); renderProfiles(); };
+document.getElementById('profile-new').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; commitProfiles([...profiles, { name: 'New profile', panes: ['terminal'] }], profiles.length); };
+document.getElementById('profile-duplicate').onclick = () => { if (profileDirty && !confirm('Discard unsaved profile edits?')) return; const copy = structuredClone(profiles[profileIndex]); copy.name += ' copy'; commitProfiles([...profiles, copy], profiles.length); };
+document.getElementById('profile-delete').onclick = () => { if (!confirm('Delete this profile? Existing spaces are not affected.')) return; const nextProfiles = profiles.filter((_, index) => index !== profileIndex); if (!nextProfiles.length) nextProfiles.push({ name: 'New profile', panes: ['terminal'] }); commitProfiles(nextProfiles, 0); };
 document.getElementById('profile-import').onclick = () => document.getElementById('profile-file').click();
-document.getElementById('profile-file').onchange = async event => { const f = event.target.files[0]; if (!f) return; try { const p = parseProfile(await f.text()).source; if (profileDirty && !confirm('Discard unsaved profile edits?')) return; profiles.push(p); profileIndex = profiles.length - 1; persistProfiles(); renderProfiles(); profileStatus.textContent = 'Profile imported.'; } catch (e) { profileStatus.textContent = `Cannot import: ${e.message}`; } finally { event.target.value = ''; } };
+document.getElementById('profile-file').onchange = async event => { const f = event.target.files[0]; if (!f) return; try { const p = parseProfile(await f.text()).source; if (profileDirty && !confirm('Discard unsaved profile edits?')) return; if (commitProfiles([...profiles, p], profiles.length)) profileStatus.textContent = 'Profile imported.'; } catch (e) { profileStatus.textContent = `Cannot import: ${e.message}`; } finally { event.target.value = ''; } };
 document.getElementById('profile-export').onclick = () => { if (profileDirty) { profileStatus.textContent = 'Save changes before exporting.'; return; } const p = profiles[profileIndex], a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })); a.download = `${p.name.replace(/[^a-z0-9_-]+/gi, '-') || 'profile'}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
 async function launchProfile() {
   if (profileDirty) { profileStatus.textContent = 'Save changes before launching.'; return; }
@@ -997,7 +1009,7 @@ async function launchProfile() {
     let groupAnchor = null, active = null;
     group.tabs.forEach((tab, index) => {
       const id = `pane-${crypto.randomUUID()}`, path = value => value?.replaceAll('${workspace}', root || '') || null;
-      const params = { label: tab.title || tab.type, tool: tab.type, terminalName: tab.type === 'terminal' ? tab.title : undefined, address: tab.url, profileCwd: path(tab.cwd), profileShell: tab.shell, profileEnv: tab.env, profileRoot: path(tab.root), profilePins: tab.pins?.map(pin => ({ ...pin, path: path(pin.path) })), profileFavorites: tab.favorites, openFile: path(tab.reveal) };
+      const params = { label: tab.title || tab.type, tool: tab.type, terminalName: tab.type === 'terminal' ? tab.title : undefined, profileTitle: tab.type === 'files' ? tab.title : undefined, address: tab.url, profileCwd: path(tab.cwd), profileShell: tab.shell, profileEnv: tab.env, profileRoot: path(tab.root), profilePins: tab.pins?.map(pin => ({ ...pin, path: path(pin.path) })), profileFavorites: tab.favorites, openFile: path(tab.reveal) };
       const referencePanel = groupAnchor || anchor;
       if (tab.command) pendingProfileCommands.set(id, tab.command);
       const panel = dock.addPanel({ id, component: 'demo', title: tab.title || tab.type, params, ...(referencePanel ? { position: { referencePanel, direction: groupAnchor ? 'within' : profile.direction === 'column' ? 'below' : 'right' } } : {}) });
@@ -1020,8 +1032,23 @@ async function recoverApp(restart = false) {
   if (result !== 'proceed') { if (result !== 'cancel') alert('Some changes could not be saved. Review them before continuing.'); return; }
   await captureTerminalDirectories();
   if (!workspaceStorageLocked && !saveActiveSpace()) return;
-  if (restart && isTauri()) await invoke('restart_app');
-  else location.reload();
+  let restoreBrowsers;
+  try {
+    if (restart && isTauri()) await invoke('restart_app');
+    else {
+      // Native child webviews outlive a reload of the main interface.
+      if (isTauri()) {
+        restoreBrowsers = await closeBrowsersForReload();
+        await closeTerminalsForReload();
+      }
+      location.reload();
+    }
+  } catch (error) {
+    let message = `Could not ${action}: ${error}`;
+    try { await restoreBrowsers?.(); }
+    catch (restoreError) { message += ` Browser panes could not be restored: ${restoreError}`; }
+    alert(message);
+  }
 }
 document.getElementById('app-reload').onclick = () => void recoverApp();
 document.getElementById('app-restart').onclick = () => void recoverApp(true);

@@ -7,9 +7,11 @@ test('download updates beat a stale initial snapshot and cancel targets the sele
   let receive, finishSnapshot;
   const calls = [];
   class Element {
-    constructor() { this.children = []; this.attributes = {}; this.listeners = {}; this.hidden = false; }
-    append(...children) { this.children.push(...children); }
-    insertBefore(child) { this.children.push(child); }
+    constructor() { this.children = []; this.attributes = {}; this.listeners = {}; this.hidden = false; this.isConnected = true; }
+    append(...children) { for (const child of children) child.parent = this; this.children.push(...children); }
+    insertBefore(child) { child.parent = this; this.children.push(child); }
+    getClientRects() { return [1]; }
+    remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
     replaceChildren() { this.children = []; }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, callback) { this.listeners[name] = callback; }
@@ -19,7 +21,7 @@ test('download updates beat a stale initial snapshot and cancel targets the sele
       return null;
     }
   }
-  const context = vm.createContext({ document: { createElement: () => new Element() }, console });
+  const context = vm.createContext({ document: { createElement: () => new Element(), visibilityState: 'visible' }, console });
   const module = new vm.SourceTextModule(await readFile(new URL('../src/browser-downloads.js', import.meta.url), 'utf8'), { context });
   const imports = {
     './browser-icons.js': { browserIcons: { downloads: '<svg></svg>' } },
@@ -41,18 +43,31 @@ test('download updates beat a stale initial snapshot and cancel targets the sele
   finishSnapshot([{ id: '1', path: 'C:\\Downloads\\old.txt', received: 0, total: 10, status: 'in_progress' }]);
   await new Promise(resolve => setImmediate(resolve));
   const panel = view.querySelector('.browser-downloads'), row = panel.querySelector('.browser-download-list').children[0];
-  assert.equal(row.children[0].textContent, 'new.txt');
-  assert.equal(row.children[1].textContent, 'in progress · 5 B / 10 B');
-  await row.children.find(child => child.textContent === 'Cancel').listeners.click();
+  assert.equal(panel.hidden, false, 'a new download opens the visible panel');
+  assert.equal(row.querySelector('.browser-download-name').textContent, 'new.txt');
+  assert.equal(row.querySelector('.browser-download-detail').textContent, 'Downloading \u00b7 5 B of 10 B');
+  const badge = controls.querySelector('.browser-download-badge');
+  assert.equal(badge.textContent, '1');
+  await row.querySelector('.browser-download-actions').children.find(child => child.textContent === 'Cancel').listeners.click();
   assert.equal(calls.at(-1)[0], 'browser_download_action');
   assert.equal(calls.at(-1)[1].id, '1');
   receive({ payload: { id: '1', path: 'C:\\Downloads\\new.txt', received: 5, total: 10, status: 'paused', can_resume: true } });
   const paused = panel.querySelector('.browser-download-list').children[0];
-  await paused.children.find(child => child.textContent === 'Resume').listeners.click();
+  await paused.querySelector('.browser-download-actions').children.find(child => child.textContent === 'Resume').listeners.click();
   assert.equal(calls.at(-1)[1].action, 'resume');
+  panel.querySelector('.browser-download-close').listeners.click();
+  assert.equal(panel.hidden, true);
   receive({ payload: { id: '1', path: 'C:\\Downloads\\new.txt', received: 10, total: 10, status: 'completed' } });
+  assert.equal(panel.hidden, true, 'completion does not reopen a manually closed panel');
+  assert.equal(badge.textContent, '\u2022', 'completion leaves an unread indicator');
+  assert.match(view.querySelector('.browser-download-announcement').textContent, /new.txt: Downloaded/);
+  controls.children[0].listeners.click();
+  assert.equal(badge.hidden, true);
   const completed = panel.querySelector('.browser-download-list').children[0];
-  await completed.children.find(child => child.textContent === 'Show in folder').listeners.click();
+  assert.equal(completed.querySelector('.browser-download-detail').textContent, 'Downloaded \u00b7 10 B of 10 B');
+  await completed.querySelector('.browser-download-actions').children.find(child => child.textContent === 'Show in folder').listeners.click();
   assert.equal(calls.at(-1)[0], 'browser_download_reveal');
   dispose();
+  assert.equal(controls.children.length, 0);
+  assert.equal(view.querySelector('.browser-downloads'), null);
 });

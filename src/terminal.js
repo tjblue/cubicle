@@ -2,7 +2,7 @@ import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { findFileLinks } from './terminal-links.js';
-import { captureTerminalDirectory } from './terminal-directory-capture.js';
+import { captureTerminalDirectory, terminalDirectoryFromOsc, terminalDirectoryFromNotification } from './terminal-directory-capture.js';
 import { listenForTerminalAttention } from './terminal-attention.js';
 import '@xterm/xterm/css/xterm.css';
 
@@ -23,13 +23,20 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
-    session = { id: crypto.randomUUID(), element, terminal, fit, started: false, starting: false, closed: false, ready: null, input: Promise.resolve(), cwd, onFileLink, onCwdChange: options.onCwdChange };
+    session = { id: crypto.randomUUID(), element, terminal, fit, started: false, starting: false, closed: false, ready: null, input: Promise.resolve(), cwd, onFileLink, onCwdChange: options.onCwdChange, onInput: options.onInput };
     const updateCwd = path => {
       if (session.closed || !path || session.cwd === path) return;
       session.cwd = path;
+      session.onCwdChange?.(path);
     };
     session.updateCwd = updateCwd;
-    terminal.parser.registerOscHandler(7, value => { try { const url = new URL(value); if (url.protocol === 'file:') updateCwd(decodeURIComponent(url.pathname).replace(/^\/([a-z]:)/i, '$1')); } catch {} return false; });
+    terminal.parser.registerOscHandler(7, value => { updateCwd(terminalDirectoryFromOsc(value, /^Win/i.test(navigator.platform || ''))); return false; });
+    terminal.parser.registerOscHandler(9, value => {
+      const path = terminalDirectoryFromNotification(value);
+      if (!path) return false;
+      updateCwd(path);
+      return true;
+    });
     session.disposeAttention = listenForTerminalAttention(terminal, kind => session.onAttention?.(kind));
     session.onAttention = options.onAttention;
     terminal.registerLinkProvider({ provideLinks(lineNumber, callback) {
@@ -49,7 +56,7 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
     });
     const restart = document.createElement('button'); restart.type = 'button'; restart.className = 'terminal-restart'; restart.textContent = 'Restart terminal'; restart.hidden = true;
     element.append(restart);
-    restart.addEventListener('click', () => { if (session.closed || session.started || session.starting) return; session.id = crypto.randomUUID(); session.ready = start(false); });
+    restart.addEventListener('click', () => { if (session.closed || session.closingForReload || session.started || session.starting) return; session.id = crypto.randomUUID(); session.ready = start(false); });
     session.resize = () => {
       if (session.closed || !element.isConnected || !element.clientWidth || !element.clientHeight) return;
       try {
@@ -90,6 +97,8 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
       if (terminal.hasSelection()) copySelection(); else pasteClipboard();
     });
     terminal.onData((data) => {
+      if (session.closingForReload) return;
+      session.onInput?.();
       session.input = session.input.then(() => session.ready).then(() => {
         if (!session.closed && session.started) return invoke('terminal_write', { id: session.id, data });
       }).catch((error) => { if (!session.closed) terminal.writeln(`\r\n\x1b[31mInput error: ${error}\x1b[0m`); });
@@ -141,6 +150,7 @@ export function mountTerminal(id, container, cwd = null, onTitleChange = () => {
     session.onTitleChange = onTitleChange;
     session.onFileLink = onFileLink;
     session.onCwdChange = options.onCwdChange;
+    session.onInput = options.onInput;
     session.onAttention = options.onAttention;
     session.onTitleChange(session.title);
     container.append(session.element);
@@ -159,7 +169,7 @@ export function refreshTerminal(id) {
   if (session) requestAnimationFrame(() => session.resize());
 }
 
-export function closeTerminal(id) {
+function detachTerminal(id) {
   const session = sessions.get(id);
   if (!session) return;
   sessions.delete(id);
@@ -168,7 +178,27 @@ export function closeTerminal(id) {
   session.disposeAttention();
   clearTimeout(session.resizeTimer);
   session.terminal.dispose();
+  return session;
+}
+
+export function closeTerminal(id) {
+  const session = detachTerminal(id);
+  if (!session) return Promise.resolve();
   // A close during startup waits for the spawn command to finish first.
   const runtimeId = session.id;
-  session.ready.finally(() => invoke('terminal_close', { id: runtimeId }).catch(() => {}));
+  return session.ready.finally(() => invoke('terminal_close', { id: runtimeId })).catch(error => console.warn('Could not close terminal:', error));
+}
+
+export async function closeTerminalsForReload() {
+  const pending = [...sessions.entries()];
+  for (const [, session] of pending) session.closingForReload = true;
+  try {
+    await Promise.all(pending.map(([, session]) => session.ready));
+    // Include sessions left behind by an earlier interface reload.
+    await invoke('terminal_close_all');
+    for (const [id, session] of pending) if (sessions.get(id) === session) detachTerminal(id);
+  } finally {
+    // A failed native cleanup keeps the remaining terminals usable for retry.
+    for (const [, session] of pending) session.closingForReload = false;
+  }
 }

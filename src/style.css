@@ -95,8 +95,8 @@ button:hover { background: #475065; }
 .browser-controls { display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: #20242d; border-bottom: 1px solid var(--border-subtle); }
 .browser-controls button { width: 30px; height: 30px; padding: 0; border: 0; background: transparent; color: #b6c1d5; font-size: 18px; }
 .browser-controls button svg { display: block; width: 18px; height: 18px; margin: auto; }
-.browser-controls button:hover { background: var(--surface-control); }
 .browser-controls .browser-popup-mode[aria-pressed="true"] { color: #fff; background: var(--surface-selected); }
+.browser-controls button:hover { background: var(--surface-control); }
 .browser-controls form { flex: 1; min-width: 0; }
 .browser-controls input { width: 100%; height: 32px; padding: 0 12px; color: var(--text-primary); background: #2a2f3d; border: 1px solid transparent; border-radius: 16px; outline: none; }
 .browser-controls input:focus { border-color: #7284b0; }
@@ -359,6 +359,7 @@ header.app-menubar { flex: none; justify-content: flex-start; gap: 0; height: 37
 .tab-group-dot { width: 10px; height: 10px; flex: none; border-radius: 50%; }
 
 .files-edit, .files-save { margin-left: auto; flex: none; padding: 5px 10px; font-size: 12px; }
+.files-reload { flex: none; padding: 5px 10px; font-size: 12px; }
 .files-document.markdown .milkdown .ProseMirror { min-height: 240px; outline: none; color: #d5deed; line-height: 1.7; }
 .files-document.markdown .milkdown .ProseMirror p.is-editor-empty:first-child::before { content: 'Start writing…'; color: #718198; float: left; height: 0; pointer-events: none; }
 .files-document.markdown .milkdown .ProseMirror blockquote { border-left: 3px solid #536581; margin-left: 0; padding-left: 14px; color: #aebdd0; }
@@ -667,7 +668,7 @@ button:disabled { cursor: default; }
 .agent-session-form input, .agent-session-form select { border-radius: var(--radius-control); }
 .space-dialog, .app-confirm-dialog { border-radius: 10px; background: var(--surface-menu); border-color: var(--border-control); }
 .space-dialog-button, .app-confirm-dialog > button, .files-header button, .files-path button,
-.files-edit, .files-save, .agent-session-form button, .session-match-choice button,
+.files-edit, .files-save, .files-reload, .agent-session-form button, .session-match-choice button,
 .profile-links button, .chat-hook-heading button, .chat-hook-actions button, .hook-status-row button,
 .terminal-restart { border-radius: var(--radius-chip); }
 .tab-group-badge, .chat-hook-badge { border-radius: var(--radius-chip); }
@@ -743,5 +744,4 @@ button:disabled { cursor: default; }
 .terminal-surface .xterm-viewport { scrollbar-width: none; }
 .terminal-surface .xterm-viewport::-webkit-scrollbar { display: none; }
 
-/* Size Lucide controls consistently with the surrounding chrome. */
 .files-refresh svg, .files-path-cancel svg, #settings-close svg, .space-dialog-close svg { width: 16px; height: 16px; vertical-align: middle; }
