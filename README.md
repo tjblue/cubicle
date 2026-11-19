@@ -40,8 +40,11 @@ For example, a profile can open a dev server, project files, and the local app i
 Launch profiles into a new Space, append panes to an existing one, or replace its layout. Commands are shown for confirmation before they run. See the [Space profiles guide](docs/guides/space-profiles.md) for options and examples.
 
 ## Get started
+### Quick Install
+The pre-built `.exe` is available under the [releases of this repo](https://github.com/tjblue/cubicle/releases).
 
-Cubicle is a Windows desktop app built with Tauri, Rust, and JavaScript. Install Node.js, Rust, and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/), then run:
+### Build `.exe` yourself
+Install Node.js, Rust, and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/), then run:
 
 ```powershell
 npm install
