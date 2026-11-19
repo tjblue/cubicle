@@ -47,7 +47,9 @@ Launch profiles into a new Space, append panes to an existing one, or replace it
 
 ## Get started
 
-Cubicle is a Windows desktop app built with Tauri, Rust, and JavaScript. Install Node.js, Rust, and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/), then run:
+Cubicle is a Windows desktop app built with Tauri, Rust, and JavaScript. The pre-built `.exe` is available under the [releases of this repo](https://github.com/tjblue/cubicle/releases). 
+
+Install Node.js, Rust, and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/), then run:
 
 ```powershell
 npm install
