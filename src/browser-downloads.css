@@ -1,8 +1,23 @@
-.browser-downloads { padding: 10px 12px; color: var(--text-primary); background: var(--surface-card); border-bottom: 1px solid var(--border-subtle); max-height: 220px; overflow: auto; }
-.browser-downloads[hidden] { display: none; }
-.browser-download-list { display: grid; gap: 8px; margin-top: 8px; color: var(--text-muted); }
-.browser-download-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 3px 10px; align-items: center; }
-.browser-download-row strong, .browser-download-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.browser-download-row small { grid-column: 1; }
-.browser-download-row progress { width: 100%; height: 6px; grid-column: 1; }
-.browser-download-row button { grid-row: 1 / span 3; }
+.browser-downloads { flex: none; padding: 12px 14px 14px; color: var(--text-primary); background: #1d2330; border-bottom: 1px solid var(--border-subtle); max-height: min(40vh, 320px); overflow-y: auto; }
+.browser-downloads[hidden], .browser-download-badge[hidden] { display: none; }
+.browser-download-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.browser-download-header strong { font-size: 13px; }
+.browser-download-close { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #aab5c8; font-size: 20px; line-height: 1; }
+.browser-download-close:hover { background: #343d4d; color: #fff; }
+.browser-download-list { display: grid; gap: 6px; margin-top: 6px; }
+.browser-download-empty { margin: 6px 0 2px; font-size: 12px; color: var(--text-muted); }
+.browser-download-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 10px; border: 1px solid #384354; border-radius: 8px; background: #252d3a; }
+.browser-download-status-icon { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px; background: #344a69; color: #a7caff; font-size: 16px; font-weight: 700; }
+.browser-download-status-icon.is-completed { background: #254a40; color: #9ce2bb; }
+.browser-download-status-icon.is-interrupted { background: #573739; color: #ffc1b8; }
+.browser-download-content { display: grid; flex: 1; min-width: 0; gap: 3px; }
+.browser-download-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.browser-download-detail { color: #aab9cc; font-size: 11px; line-height: 1.35; }
+.browser-download-progress { display: block; width: 100%; height: 5px; margin-top: 3px; accent-color: #8db5ff; }
+.browser-download-actions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.browser-download-actions button { width: auto; min-height: 28px; padding: 4px 9px; border: 1px solid #526078; border-radius: 6px; background: #313b4b; color: #e8eef9; font-size: 11px; white-space: nowrap; }
+.browser-download-actions button:hover { background: #42516a; }
+.browser-controls .browser-download-toggle { position: relative; overflow: visible; }
+.browser-download-badge { position: absolute; top: 0; right: -3px; display: grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 999px; background: #87adf5; color: #111a29; font-size: 10px; font-weight: 700; line-height: 1; }
+.browser-download-announcement { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 500px) { .browser-download-row { flex-wrap: wrap; } .browser-download-content { flex-basis: calc(100% - 40px); } .browser-download-actions { margin-left: 40px; } }
